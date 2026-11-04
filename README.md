@@ -1,51 +1,59 @@
-# Auto Skip YouTube Ads (Microsoft Edge & Chrome)
+# Auto Skip YouTube Ads
 
-Ekstensi browser berbasis Manifest V3 untuk Microsoft Edge dan Google Chrome yang secara otomatis menekan tombol "Lewati Iklan" (Skip Ad) saat tombol tersebut muncul di YouTube, tanpa memblokir permintaan jaringan iklan.
+Ekstensi browser berbasis **Manifest V3** untuk Microsoft Edge dan Google Chrome yang secara otomatis menekan tombol "Lewati Iklan" (*Skip Ad*) saat tombol tersebut muncul di YouTube, tanpa memblokir permintaan jaringan iklan (*network request*).
 
-Dengan metode ini, YouTube tidak akan mendeteksi penggunaan ad-blocker karena video iklan tetap diizinkan dimuat dan diputar secara normal, namun sistem otomatisasi langsung mengeklik tombol skip begitu countdown selesai atau tombol tersedia.
+Dengan metode interaksi DOM berbasis **Trusted ProxyEvent**, YouTube tidak akan mendeteksi penggunaan ad-blocker karena video iklan tetap diizinkan dimuat secara normal, sementara sistem secara otomatis mengeksekusi aksi lewati iklan seketika tombol tersedia.
+
+---
+
+## Daftar Isi
+
+- [Fitur Utama](#fitur-utama)
+- [Arsitektur Teknis](#arsitektur-teknis)
+- [Struktur Berkas](#struktur-berkas)
+- [Panduan Pemasangan](#panduan-pemasangan)
+  - [Microsoft Edge](#microsoft-edge)
+  - [Google Chrome](#google-chrome)
+- [Privasi & Keamanan](#privasi--keamanan)
+- [Lisensi](#lisensi)
 
 ---
 
 ## Fitur Utama
 
-- **Otomatis Klik Tombol Skip Murni**: Mendeteksi dan mengeklik tombol lewati iklan secara instan sesaat setelah muncul di layar.
-- **Tutup Banner Overlay**: Menutup pop-up banner iklan yang muncul di atas pemutar video secara otomatis.
-- **Tanpa Ad-Block Triggers**: Tidak memblokir network request atau script analitik YouTube, sehingga terhindar dari deteksi anti-adblock.
-- **Tanpa Stutter / 403 Forbidden**: Membiarkan video iklan mengalir alami pada kecepatan standar tanpa memodifikasi rate buffer CDN, mencegah error buffer macet.
-- **Counter Iklan Dilewati**: Menghitung berapa banyak iklan yang telah dilewati secara real-time.
-- **Pengaturan Fleksibel**:
-  - Auto-Skip Tombol Iklan (Aktif secara default)
-  - Tutup Banner Iklan (Aktif secara default)
-  - Bisukan Audio Iklan (Opsional)
+- **Otomatis Klik Tombol Skip Murni**: Mengeksekusi aksi lewati iklan seketika tombol "Lewati Iklan" (*Skip Ad*) aktif di detik ke-5 atau setelah hitungan mundur selesai.
+- **Dukungan Multi-Iklan**: Menangani rangkaian iklan beruntun (*Ad 1 of 2* dan *Ad 2 of 2*) secara otomatis tanpa henti.
+- **Bypass Proteksi isTrusted YouTube**: Memanfaatkan injeksi konteks `world: "MAIN"` dan `ProxyEvent` untuk memicu handler klik internal player YouTube (`Nqb.onClick`) secara sah tanpa diblokir oleh anti-bot.
+- **Tutup Banner Overlay**: Otomatis menutup banner iklan pop-up yang menutupi area bawah video.
+- **Pengatur Kecepatan Iklan (1x - 16x)**: Pilihan untuk memutar video iklan lebih cepat dengan perlindungan *auto-ease* di detik akhir agar buffer video tidak macet.
+- **Bisukan Audio Iklan (Auto-Mute)**: Opsi membisukan suara iklan secara otomatis selama iklan berlangsung dan mengembalikan volume saat video utama mulai.
+- **Statistik & Penghitung Real-Time**: Melacak jumlah iklan yang berhasil dilewati melalui antarmuka popup yang bersih dan modern.
+- **Bebas Deteksi Anti-Adblock**: Tidak memblokir traffic CDN atau domain analitik, menjaga kestabilan pemutaran video tanpa peringatan larangan ad-blocker.
 
 ---
 
-## Cara Memasang di Microsoft Edge
+## Arsitektur Teknis
 
-1. Buka browser **Microsoft Edge**.
-2. Masuk ke halaman manajemen ekstensi dengan mengetikkan alamat berikut di address bar:
-   ```text
-   edge://extensions
-   ```
-3. Di bilah menu sebelah kiri, aktifkan toggle **Mode pengembang** (*Developer mode*).
-4. Klik tombol **Muat yang belum dibongkar** (*Load unpacked*) di bagian atas.
-5. Pilih folder ekstensi ini:
-   ```text
-   /home/oktaavsm/Code/github.com/auto-skip-ads-ext
-   ```
-6. Ekstensi **Auto Skip Ads** sekarang aktif dan siap digunakan.
+Ekstensi ini dirancang menggunakan arsitektur modular dua lapis (*Dual-World Architecture*) agar kompatibel penuh dengan standar keamanan Manifest V3:
 
----
-
-## Cara Memasang di Google Chrome (Opsional)
-
-1. Buka browser **Google Chrome**.
-2. Buka URL:
-   ```text
-   chrome://extensions
-   ```
-3. Aktifkan **Developer mode** di pojok kanan atas.
-4. Klik tombol **Load unpacked** di pojok kiri atas dan pilih folder ekstensi ini.
+```text
+[ Browser Context ]
+  |
+  +-- Injected Script (world: "MAIN")
+  |     - Berjalan langsung di eksekusi utama YouTube
+  |     - Menangkap listener klik asli via EventTarget.prototype.addEventListener
+  |     - Membungkus MouseEvent dengan ProxyEvent (isTrusted: true, composedPath)
+  |     - Mengeksekusi Nqb.onClick langsung pada tombol .ytp-skip-ad-button
+  |
+  +-- Content Script (Isolated World)
+  |     - Mengelola pengaturan pengguna (speed, mute, toggle banner)
+  |     - Menyimpan data statistik ke chrome.storage.local
+  |     - Mengawasi DOM dan mengendalikan pemutar audio/video
+  |
+  +-- Extension Popup (Action UI)
+        - Antarmuka tema gelap (Dark Theme)
+        - Sinkronisasi pengaturan real-time melalui onChanged storage
+```
 
 ---
 
@@ -54,7 +62,8 @@ Dengan metode ini, YouTube tidak akan mendeteksi penggunaan ad-blocker karena vi
 ```text
 auto-skip-ads-ext/
 |-- manifest.json          # Konfigurasi Manifest V3 ekstensi
-|-- content.js             # Skrip automasi deteksi & klik tombol skip murni
+|-- injected.js            # Engine eksekusi ProxyEvent di Main World
+|-- content.js             # Kontroler pemutar, audio, banner, dan storage di Isolated World
 |-- popup/
 |   |-- popup.html         # Tampilan UI menu kontrol ekstensi
 |   |-- popup.css          # Desain dan tata letak UI popup
@@ -63,11 +72,51 @@ auto-skip-ads-ext/
 |   |-- icon16.png
 |   |-- icon48.png
 |   |-- icon128.png
-`-- README.md
+|-- LICENSE                # Lisensi open-source MIT
+`-- README.md              # Dokumentasi proyek
 ```
+
+---
+
+## Panduan Pemasangan
+
+### Microsoft Edge
+
+1. Buka browser **Microsoft Edge**.
+2. Masuk ke halaman ekstensi dengan mengetikkan alamat berikut di bilah alamat (*address bar*):
+   ```text
+   edge://extensions
+   ```
+3. Di bilah menu sebelah kiri, aktifkan sakelar **Mode pengembang** (*Developer mode*).
+4. Klik tombol **Muat yang belum dibongkar** (*Load unpacked*) di bagian atas.
+5. Pilih folder repositori ini:
+   ```text
+   /path/ke/auto-skip-ads-ext
+   ```
+6. Ekstensi **Auto Skip YouTube Ads** kini aktif dan siap digunakan.
+
+### Google Chrome
+
+1. Buka browser **Google Chrome**.
+2. Buka URL manajemen ekstensi:
+   ```text
+   chrome://extensions
+   ```
+3. Aktifkan sakelar **Developer mode** di pojok kanan atas.
+4. Klik tombol **Load unpacked** di pojok kiri atas, lalu pilih folder repositori ini.
+5. Ekstensi akan langsung terpasang dan aktif di tab YouTube.
+
+---
+
+## Privasi & Keamanan
+
+- **100% Berjalan Lokal**: Seluruh logika deteksi dan otomasi dieksekusi secara lokal di dalam browser pengguna.
+- **Tanpa Telemetri**: Ekstensi tidak mengirimkan data penjelajahan, riwayat tontonan, atau analitik apa pun ke server eksternal.
+- **Izin Minimal**: Hanya memerlukan izin `storage` untuk menyimpan preferensi pengguna (seperti status aktif/nonaktif dan kelipatan kecepatan).
 
 ---
 
 ## Lisensi
 
-Didistribusikan di bawah lisensi MIT.
+Proyek ini dirilis secara terbuka di bawah lisensi [MIT](LICENSE).
+Hak Cipta (c) 2026 Oktaviansyah.
