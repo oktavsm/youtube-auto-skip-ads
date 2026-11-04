@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] High-Precision Skip Engine loaded.');
+  console.log('[AutoSkipAds] High-Precision Controller loaded.');
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -15,29 +15,8 @@
   let originalPlaybackRate = 1;
   let currentAdIdentifier = '';
   let isRunning = false;
-  let lastSkipClickTime = 0;
 
-  // Strict list of skip button selectors
-  const SKIP_SELECTORS = [
-    'button.ytp-skip-ad-button',
-    'button.ytp-skip-ad-button-fix-fullscreen-grid',
-    'button.ytp-ad-skip-button-modern',
-    'button.ytp-ad-skip-button',
-    'button[id^="skip-button:"]',
-    '.ytp-skip-ad-button',
-    '.ytp-skip-ad-button-fix-fullscreen-grid',
-    '.ytp-ad-skip-button-modern',
-    '.ytp-ad-skip-button',
-    '.ytp-ad-skip-button-slot button',
-    '.ytp-ad-skip-button-container button',
-    'button[aria-label*="Skip"]',
-    'button[aria-label*="Lewati"]',
-    '[id^="skip-button:"] button',
-    '[id^="skip-button:"]',
-    '.videoAdUiSkipButton'
-  ];
-
-  // Overlay and banner close selectors
+  // Banner close selectors
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container button',
@@ -45,12 +24,20 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
+  // Sync enabled state to documentElement for main world script
+  function syncStateToDOM() {
+    if (document.documentElement) {
+      document.documentElement.dataset.autoSkipEnabled = settings.enabled ? 'true' : 'false';
+    }
+  }
+
   // Load settings from storage
   function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
         if (stored) {
           settings = { ...DEFAULT_SETTINGS, ...stored };
+          syncStateToDOM();
         }
       });
     }
@@ -65,29 +52,16 @@
             settings[key] = change.newValue;
           }
         }
+        syncStateToDOM();
       }
     });
   }
 
-  // Robust visibility check handling position:fixed, opacity:0.5, and modern grids
+  // Visibility check
   function isVisible(el) {
     if (!el) return false;
-
-    if (typeof el.checkVisibility === 'function') {
-      try {
-        if (!el.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })) {
-          return false;
-        }
-      } catch (e) {
-        // Fallback to style and rect checks below
-      }
-    }
-
     const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') {
-      return false;
-    }
-
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   }
@@ -107,7 +81,7 @@
     return false;
   }
 
-  // Generate unique signature for current ad to avoid spamming the skip counter
+  // Generate unique signature for current ad to track counter accurately
   function getAdSignature() {
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
     const badge = document.querySelector('.ytp-ad-text, .ytp-ad-simple-ad-badge');
@@ -127,103 +101,6 @@
         const nextCount = (data.skipCount || 0) + 1;
         chrome.storage.local.set({ skipCount: nextCount });
       });
-    }
-  }
-
-  // Find the active skip button in the DOM
-  function findSkipButton() {
-    // 1. Check exact selectors
-    for (const sel of SKIP_SELECTORS) {
-      const el = document.querySelector(sel);
-      if (el && isVisible(el)) {
-        if (el.tagName.toLowerCase() !== 'button') {
-          const innerBtn = el.querySelector('button');
-          if (innerBtn && isVisible(innerBtn)) {
-            return innerBtn;
-          }
-        }
-        return el;
-      }
-    }
-
-    // 2. Fallback search by text inside player
-    const player = document.querySelector('#movie_player, .video-ads, .ytp-ad-module');
-    if (!player) return null;
-
-    const candidates = player.querySelectorAll('button, [role="button"]');
-    for (const btn of candidates) {
-      if (btn && isVisible(btn)) {
-        const text = (btn.textContent || '').trim().toLowerCase();
-        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-        if (text.startsWith('skip') || text.includes('lewati') || aria.startsWith('skip') || aria.includes('lewati')) {
-          return btn;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  // Dispatch full pointer and mouse event chain with composed: true
-  function clickSkipButton(btn) {
-    if (!btn) return;
-
-    try {
-      console.log('[AutoSkipAds] Dispatching skip click to:', btn.tagName, btn.className || btn.id);
-
-      // 1. Focus element
-      if (typeof btn.focus === 'function') {
-        btn.focus();
-      }
-
-      // 2. Inner target elements
-      const innerText = btn.querySelector('.ytp-skip-ad-button__text, [class*="skip-button__text"]');
-
-      // 3. Native .click()
-      btn.click();
-      if (innerText && typeof innerText.click === 'function') {
-        innerText.click();
-      }
-
-      // 4. Dispatch simulated PointerEvent and MouseEvent sequence with real coordinates & composed: true
-      const rect = btn.getBoundingClientRect();
-      const clientX = rect.left + rect.width / 2;
-      const clientY = rect.top + rect.height / 2;
-
-      const baseOpts = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-        detail: 1,
-        screenX: clientX,
-        screenY: clientY,
-        clientX,
-        clientY,
-        pointerId: 1,
-        pointerType: 'mouse',
-        isPrimary: true
-      };
-
-      if (typeof PointerEvent === 'function') {
-        btn.dispatchEvent(new PointerEvent('pointerover', { ...baseOpts, button: 0, buttons: 0 }));
-        btn.dispatchEvent(new PointerEvent('pointerenter', { ...baseOpts, button: 0, buttons: 0 }));
-        btn.dispatchEvent(new PointerEvent('pointerdown', { ...baseOpts, button: 0, buttons: 1 }));
-      }
-      btn.dispatchEvent(new MouseEvent('mouseover', { ...baseOpts, button: 0, buttons: 0 }));
-      btn.dispatchEvent(new MouseEvent('mousedown', { ...baseOpts, button: 0, buttons: 1 }));
-
-      if (typeof PointerEvent === 'function') {
-        btn.dispatchEvent(new PointerEvent('pointerup', { ...baseOpts, button: 0, buttons: 0 }));
-      }
-      btn.dispatchEvent(new MouseEvent('mouseup', { ...baseOpts, button: 0, buttons: 0 }));
-      btn.dispatchEvent(new MouseEvent('click', { ...baseOpts, button: 0, buttons: 0 }));
-
-      if (innerText) {
-        innerText.dispatchEvent(new MouseEvent('click', { ...baseOpts, button: 0, buttons: 0 }));
-      }
-    } catch (e) {
-      // Handled silently
     }
   }
 
@@ -280,6 +157,15 @@
     }
   }
 
+  // Listen to skip events from main world script
+  document.addEventListener('__AutoSkipAds_AdSkipped', () => {
+    const sig = getAdSignature();
+    if (sig !== currentAdIdentifier) {
+      currentAdIdentifier = sig;
+      incrementSkipCounter();
+    }
+  });
+
   // Main scan tick
   function handleAds() {
     if (isRunning || !settings.enabled) return;
@@ -294,30 +180,11 @@
         if (signature !== currentAdIdentifier) {
           currentAdIdentifier = signature;
           incrementSkipCounter();
-          console.log('[AutoSkipAds] Ad active with signature:', signature);
+          console.log('[AutoSkipAds] Ad detected with signature:', signature);
         }
 
-        // Check if skip button is present in DOM
-        const skipBtn = findSkipButton();
-        if (skipBtn) {
-          const now = Date.now();
-          if (now - lastSkipClickTime >= 150) {
-            lastSkipClickTime = now;
-            clickSkipButton(skipBtn);
-            document.dispatchEvent(new CustomEvent('__AutoSkipAds_TriggerSkip'));
-          }
-
-          // Advance ad timeline to end once skip button is active
-          // Guarantees skip even if YouTube listener blocks synthetic click via isTrusted
-          const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-          if (video && isFinite(video.duration) && video.duration > 0 && video.currentTime > 0) {
-            if (video.duration - video.currentTime > 0.5) {
-              console.log('[AutoSkipAds] Skip button present: advancing ad timeline to end.');
-              video.currentTime = Math.max(0, video.duration - 0.1);
-              video.play().catch(() => {});
-            }
-          }
-        }
+        // Signal main world engine to check and trigger proxy skip
+        document.dispatchEvent(new CustomEvent('__AutoSkipAds_TriggerSkip'));
 
         if (settings.autoCloseBanners) {
           closeBanners();
@@ -336,8 +203,8 @@
   // Initialize
   function init() {
     loadSettings();
+    syncStateToDOM();
 
-    // DOM Observer with lightweight throttle
     let throttleTimeout = null;
     const observer = new MutationObserver(() => {
       if (throttleTimeout) return;
@@ -354,10 +221,8 @@
       attributeFilter: ['class', 'style', 'id']
     });
 
-    // Steady interval fallback (200ms)
     setInterval(handleAds, 200);
 
-    // YouTube SPA navigation events
     window.addEventListener('yt-navigate-finish', handleAds);
     window.addEventListener('yt-page-data-updated', handleAds);
   }
@@ -368,7 +233,6 @@
     init();
   }
 
-  // Handle SPA URL transitions
   let currentUrl = location.href;
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
