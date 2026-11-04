@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto Skip Ads</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="5 4 15 12 5 20 5 4" fill="currentColor"></polygon>
+          <line x1="19" y1="5" x2="19" y2="19"></line>
+        </svg>
+        <div class="brand-info">
+          <h1 class="brand-title">Auto Skip Ads</h1>
+          <span class="brand-subtitle">YouTube Companion</span>
+        </div>
+      </div>
+      <div id="statusBadge" class="status-badge status-active" aria-live="polite">
+        <span class="status-indicator"></span>
+        <span id="statusText">Aktif</span>
+      </div>
+    </header>
+
+    <!-- Stats Card -->
+    <section class="card stat-card" aria-label="Statistik Iklan">
+      <div class="stat-content">
+        <span class="stat-label">Total Iklan Dilewati</span>
+        <span id="skipCountDisplay" class="stat-value">0</span>
+      </div>
+      <button id="resetStatsBtn" class="btn btn-ghost btn-sm" title="Reset hitungan iklan" type="button">
+        Reset
+      </button>
+    </section>
+
+    <!-- Control Options -->
+    <section class="card settings-card" aria-label="Pengaturan Ekstensi">
+      <!-- Master Toggle -->
+      <div class="setting-row">
+        <div class="setting-text">
+          <label for="toggleEnabled" class="setting-title">Auto-Skip Tombol Iklan</label>
+          <span class="setting-desc">Tekan otomatis saat tombol Lewati muncul</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleEnabled" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Auto Close Banners -->
+      <div class="setting-row">
+        <div class="setting-text">
+          <label for="toggleBanners" class="setting-title">Tutup Banner Iklan</label>
+          <span class="setting-desc">Tutup banner overlay di atas video</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleBanners" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Fast Forward Ad (Optional) -->
+      <div class="setting-row">
+        <div class="setting-text">
+          <label for="toggleFastForward" class="setting-title">Percepat Iklan (16x)</label>
+          <span class="setting-desc">Putar 16x lebih cepat sebelum tombol muncul</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleFastForward">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Auto Mute Ad (Optional) -->
+      <div class="setting-row">
+        <div class="setting-text">
+          <label for="toggleMute" class="setting-title">Bisukan Audio Iklan</label>
+          <span class="setting-desc">Mute otomatis selama iklan berjalan</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleMute">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span class="footer-note">Hanya berjalan pada tab YouTube aktif</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
