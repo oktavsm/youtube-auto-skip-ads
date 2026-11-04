@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] Robust auto-skip controller loaded.');
+  console.log('[AutoSkipAds] Smart multi-ad skip controller loaded.');
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -13,34 +13,38 @@
 
   let settings = { ...DEFAULT_SETTINGS };
   let originalPlaybackRate = 1;
-  let lastSkipTime = 0;
-  const SKIP_COOLDOWN_MS = 1500;
+  let lastClickedElement = null;
+  let lastClickTimestamp = 0;
   let lastBannerCloseTime = 0;
   let isProcessing = false;
   let throttleTimer = null;
 
-  // Selectors for YouTube skip buttons
+  // Complete list of modern and legacy skip selectors
   const SKIP_SELECTORS = [
+    '.ytp-ad-skip-button-modern',
     '.ytp-skip-ad-button',
     '.ytp-ad-skip-button',
-    '.ytp-ad-skip-button-modern',
-    'button.ytp-ad-skip-button',
     'button.ytp-ad-skip-button-modern',
+    'button.ytp-skip-ad-button',
+    'button.ytp-ad-skip-button',
     '.ytp-ad-skip-button-container button',
     '.ytp-ad-skip-button-slot button',
+    '.ytp-ad-skip-button-icon-modern',
     'button.ytp-ad-skip-button-text',
-    '[class*="skip-ad-button"]',
     '[class*="ytp-ad-skip-button"]',
+    '[class*="skip-ad-button"]',
     'button[class*="skip-ad"]',
     'button[class*="skip_ad"]',
     'button[aria-label*="Skip"]',
     'button[aria-label*="Lewati"]',
+    'div[aria-label*="Skip"]',
+    'div[aria-label*="Lewati"]',
     '[id^="skip-button:"]',
     '[id^="skip-button:"] button',
     '.videoAdUiSkipButton'
   ];
 
-  // Selectors for banner and overlay close buttons
+  // Overlay and banner close selectors
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container button',
@@ -50,7 +54,7 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
-  // Load settings from storage
+  // Load stored settings
   function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
@@ -61,7 +65,7 @@
     }
   }
 
-  // Real-time settings sync
+  // Real-time settings listener
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'local') {
@@ -99,26 +103,110 @@
     }
   }
 
-  // Click skip button once with strict debouncing
-  function tryClickSkip() {
-    const now = Date.now();
-    if (now - lastSkipTime < SKIP_COOLDOWN_MS) return false;
+  // Execute full click sequence on element, its button parent, or child button
+  function performClick(target) {
+    if (!target) return;
 
+    try {
+      // 1. Direct native click
+      target.click();
+
+      const parentBtn = target.closest('button, [role="button"]');
+      if (parentBtn && parentBtn !== target) parentBtn.click();
+
+      const childBtn = target.querySelector('button, [role="button"]');
+      if (childBtn && childBtn !== target) childBtn.click();
+
+      // 2. Dispatch simulated pointer & mouse events
+      const rect = target.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY
+      };
+
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((evt) => {
+        target.dispatchEvent(new MouseEvent(evt, opts));
+        if (parentBtn && parentBtn !== target) parentBtn.dispatchEvent(new MouseEvent(evt, opts));
+        if (childBtn && childBtn !== target) childBtn.dispatchEvent(new MouseEvent(evt, opts));
+      });
+    } catch (e) {
+      // Handled silently
+    }
+  }
+
+  // Find all visible skip buttons via CSS selectors
+  function findSkipButtonsBySelector() {
+    const list = [];
     for (const sel of SKIP_SELECTORS) {
-      const btn = document.querySelector(sel);
-      if (btn && btn.offsetParent !== null) {
-        lastSkipTime = now;
-
-        // Perform clean click without recursive event storms
-        btn.click();
-        const childBtn = btn.querySelector('button');
-        if (childBtn) childBtn.click();
-
-        incrementSkipCounter();
-        console.log('[AutoSkipAds] Skip button clicked successfully.');
-        return true;
+      const elements = document.querySelectorAll(sel);
+      for (const el of elements) {
+        if (el && el.offsetParent !== null) {
+          list.push(el);
+        }
       }
     }
+    return list;
+  }
+
+  // Fallback finder by inspecting button text ("Skip", "Lewati")
+  function findSkipButtonByText() {
+    const player = document.querySelector('#movie_player, .video-ads, .ytp-ad-module');
+    if (!player) return null;
+
+    const candidates = player.querySelectorAll('button, [role="button"], div, span');
+    for (const el of candidates) {
+      if (el && el.offsetParent !== null) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        // Check if element contains skip keywords
+        if (
+          text === 'skip' ||
+          text.startsWith('skip') ||
+          text.includes('skip ad') ||
+          text.includes('lewati') ||
+          aria.startsWith('skip') ||
+          aria.includes('skip ad') ||
+          aria.includes('lewati')
+        ) {
+          return el;
+        }
+      }
+    }
+    return null;
+  }
+
+  // Click skip button with per-element debounce (supports Ad 1, Ad 2, Ad 3 seamlessly)
+  function tryClickSkip() {
+    const now = Date.now();
+
+    // 1. Gather all candidate skip elements
+    const buttons = findSkipButtonsBySelector();
+    const textFallbackBtn = findSkipButtonByText();
+    if (textFallbackBtn && !buttons.includes(textFallbackBtn)) {
+      buttons.push(textFallbackBtn);
+    }
+
+    for (const btn of buttons) {
+      // If the exact same element was clicked less than 1 second ago, avoid spamming
+      if (btn === lastClickedElement && (now - lastClickTimestamp < 1000)) {
+        continue;
+      }
+
+      // New element or cooldown passed: Click it immediately!
+      lastClickedElement = btn;
+      lastClickTimestamp = now;
+
+      performClick(btn);
+      incrementSkipCounter();
+      console.log('[AutoSkipAds] Skip button clicked successfully.');
+      return true;
+    }
+
     return false;
   }
 
@@ -130,12 +218,14 @@
     if (now - lastBannerCloseTime < 1000) return;
 
     for (const sel of BANNER_SELECTORS) {
-      const closeBtn = document.querySelector(sel);
-      if (closeBtn && closeBtn.offsetParent !== null) {
-        lastBannerCloseTime = now;
-        closeBtn.click();
-        console.log('[AutoSkipAds] Banner closed.');
-        break;
+      const elements = document.querySelectorAll(sel);
+      for (const closeBtn of elements) {
+        if (closeBtn && closeBtn.offsetParent !== null) {
+          lastBannerCloseTime = now;
+          closeBtn.click();
+          console.log('[AutoSkipAds] Banner closed.');
+          return;
+        }
       }
     }
   }
@@ -162,7 +252,7 @@
         video.__adSkipperMuted = true;
       }
     } else {
-      // Normal video playback: restore speed and audio
+      // Normal video playback: restore user speed and audio
       if (video.__adRateApplied) {
         video.playbackRate = originalPlaybackRate || 1;
         video.__adRateApplied = false;
@@ -189,20 +279,20 @@
     }
   }
 
-  // Throttled scan runner to prevent CPU locking and page freeze
+  // Throttled scan runner
   function requestScan() {
     if (throttleTimer) return;
     throttleTimer = setTimeout(() => {
       throttleTimer = null;
       handleAds();
-    }, 150);
+    }, 120);
   }
 
   // Initialize
   function init() {
     loadSettings();
 
-    // Observe DOM mutations with throttle to prevent lockup
+    // Observe DOM mutations
     const observer = new MutationObserver(() => {
       requestScan();
     });
@@ -211,11 +301,11 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class']
+      attributeFilter: ['class', 'style']
     });
 
-    // Steady interval fallback (200ms)
-    setInterval(handleAds, 200);
+    // Steady interval fallback (150ms)
+    setInterval(handleAds, 150);
 
     // YouTube SPA navigation events
     window.addEventListener('yt-navigate-finish', handleAds);
