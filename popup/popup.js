@@ -14,8 +14,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const DEFAULTS = {
     enabled: true,
     autoCloseBanners: true,
-    fastForwardAd: false,
-    autoMuteAd: false,
+    fastForwardAd: true,
+    autoMuteAd: true,
     skipCount: 0
   };
 

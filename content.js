@@ -1,43 +1,44 @@
 (() => {
   'use strict';
 
-  // Configuration and state
+  console.log('[AutoSkipAds] Content script loaded on YouTube.');
+
   const DEFAULT_SETTINGS = {
     enabled: true,
     autoCloseBanners: true,
-    fastForwardAd: false,
-    autoMuteAd: false
+    autoMuteAd: true,
+    fastForwardAd: true
   };
 
   let settings = { ...DEFAULT_SETTINGS };
-  let lastSkipTime = 0;
-  const SKIP_DEBOUNCE_MS = 600;
-  let isAdMutedByExtension = false;
-  let originalMutedState = false;
+  let isCurrentlyInAd = false;
 
-  // Selectors for YouTube skip buttons (modern and legacy)
-  const SKIP_BUTTON_SELECTORS = [
-    'button.ytp-ad-skip-button',
-    'button.ytp-ad-skip-button-modern',
+  // Modern and legacy skip button selectors
+  const SKIP_SELECTORS = [
+    '.ytp-skip-ad-button',
     '.ytp-ad-skip-button',
     '.ytp-ad-skip-button-modern',
-    '.ytp-skip-ad-button',
-    '[id^="skip-button:"] button',
     '.ytp-ad-skip-button-container button',
     '.ytp-ad-skip-button-slot button',
-    '.videoAdUiSkipButton',
-    'button.ytp-ad-skip-button-text'
+    'button.ytp-ad-skip-button-text',
+    '[class*="skip-ad"]',
+    '[class*="skip_ad"]',
+    'button[aria-label*="Skip"]',
+    'button[aria-label*="Lewati"]',
+    '[id^="skip-button:"] button',
+    '.videoAdUiSkipButton'
   ];
 
-  // Selectors for overlay and banner close buttons
-  const BANNER_CLOSE_SELECTORS = [
+  // Overlay and banner close selectors
+  const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container',
-    'button.ytp-ad-feedback-dialog-close-button',
-    '.ytp-ad-image-overlay .ytp-ad-overlay-close-button'
+    '.ytp-ad-text-overlay .ytp-ad-overlay-close-container button',
+    '[class*="overlay-close"]',
+    'button.ytp-ad-feedback-dialog-close-button'
   ];
 
-  // Load initial settings from chrome.storage.local
+  // Load settings from storage
   function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
@@ -48,7 +49,7 @@
     }
   }
 
-  // Listen for real-time settings updates from popup
+  // Real-time settings sync
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'local') {
@@ -61,57 +62,37 @@
     });
   }
 
-  // Check if an element is visible and interactive
-  function isElementVisible(el) {
+  // Trigger robust click on element and child buttons
+  function triggerClick(el) {
     if (!el) return false;
-    if (el.disabled || el.getAttribute('aria-disabled') === 'true') {
-      return false;
-    }
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) {
-      return false;
-    }
-    const style = window.getComputedStyle(el);
-    if (
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      parseFloat(style.opacity) === 0
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  // Simulate complete click sequence on target element
-  function triggerClick(element) {
-    if (!element) return false;
-
     try {
-      element.click();
+      el.click();
 
-      const rect = element.getBoundingClientRect();
+      const childBtn = el.querySelector('button');
+      if (childBtn) childBtn.click();
+
+      const rect = el.getBoundingClientRect();
       const clientX = rect.left + rect.width / 2;
       const clientY = rect.top + rect.height / 2;
 
-      const eventTypes = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-      for (const eventType of eventTypes) {
-        const evt = new MouseEvent(eventType, {
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+        const evt = new MouseEvent(type, {
           bubbles: true,
           cancelable: true,
           view: window,
           clientX,
           clientY
         });
-        element.dispatchEvent(evt);
-      }
+        el.dispatchEvent(evt);
+        if (childBtn) childBtn.dispatchEvent(evt);
+      });
       return true;
     } catch (err) {
-      console.debug('[AutoSkip] Click error:', err);
       return false;
     }
   }
 
-  // Increment skipped ads counter in storage
+  // Record stats
   function incrementSkipCounter() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get({ skipCount: 0 }, (data) => {
@@ -121,115 +102,125 @@
     }
   }
 
-  // Check if player is currently in an ad state
-  function isAdShowing() {
-    const player = document.querySelector('#movie_player, .html5-video-player');
-    if (!player) return false;
-    return (
-      player.classList.contains('ad-showing') ||
-      player.classList.contains('ad-interrupting') ||
-      document.querySelector('.ytp-ad-player-overlay') !== null
-    );
-  }
-
-  // Handle ad fast-forward and muting options when enabled
-  function handleAdMediaModifiers(adActive) {
-    const video = document.querySelector('video.html5-main-video');
-    if (!video) return;
-
-    if (adActive) {
-      // Fast forward ad if enabled
-      if (settings.fastForwardAd && isFinite(video.duration)) {
-        if (video.playbackRate < 16) {
-          video.playbackRate = 16;
-        }
-      }
-
-      // Auto mute ad if enabled
-      if (settings.autoMuteAd && !isAdMutedByExtension) {
-        originalMutedState = video.muted;
-        video.muted = true;
-        isAdMutedByExtension = true;
-      }
-    } else {
-      // Reset fast forward when ad is finished
-      if (video.playbackRate === 16) {
-        video.playbackRate = 1;
-      }
-
-      // Restore mute state when ad is finished
-      if (isAdMutedByExtension) {
-        video.muted = originalMutedState;
-        isAdMutedByExtension = false;
-      }
-    }
-  }
-
-  // Scan and click available skip buttons
-  function scanAndSkip() {
+  // Core handler running on every tick / mutation
+  function handleAds() {
     if (!settings.enabled) return;
 
-    const adActive = isAdShowing();
-    handleAdMediaModifiers(adActive);
+    // Detect if YouTube is currently presenting an ad
+    const player = document.querySelector('#movie_player, .html5-video-player');
+    const adShowing =
+      (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) ||
+      document.querySelector('.ytp-ad-player-overlay') !== null ||
+      document.querySelector('.ad-showing') !== null;
 
-    const now = Date.now();
+    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
 
-    // 1. Check for Skip Button
-    for (const selector of SKIP_BUTTON_SELECTORS) {
-      const skipBtn = document.querySelector(selector);
-      if (skipBtn && isElementVisible(skipBtn)) {
-        if (now - lastSkipTime > SKIP_DEBOUNCE_MS) {
-          lastSkipTime = now;
-          const clicked = triggerClick(skipBtn);
-          if (clicked) {
-            incrementSkipCounter();
-            console.debug('[AutoSkip] Ad skip button clicked successfully.');
-            break;
+    if (adShowing) {
+      if (!isCurrentlyInAd) {
+        isCurrentlyInAd = true;
+        incrementSkipCounter();
+        console.log('[AutoSkipAds] Ad detected. Skipping...');
+      }
+
+      // 1. Click skip button if available in DOM
+      for (const sel of SKIP_SELECTORS) {
+        const elements = document.querySelectorAll(sel);
+        for (const btn of elements) {
+          if (btn && btn.offsetParent !== null) {
+            triggerClick(btn);
           }
         }
       }
-    }
 
-    // 2. Check for Overlay / Banner Ads Close Button
-    if (settings.autoCloseBanners) {
-      for (const selector of BANNER_CLOSE_SELECTORS) {
-        const closeBtn = document.querySelector(selector);
-        if (closeBtn && isElementVisible(closeBtn)) {
-          triggerClick(closeBtn);
-          console.debug('[AutoSkip] Ad banner closed.');
+      // 2. Fast-forward & mute video ad to bypass countdown and unskippable ads
+      if (video) {
+        // Mute during ad
+        if (settings.autoMuteAd && !video.muted) {
+          video.muted = true;
+          video.__adSkipperMuted = true;
+        }
+
+        // Fast forward playback rate
+        if (settings.fastForwardAd && video.playbackRate < 16) {
+          video.playbackRate = 16;
+        }
+
+        // Seek directly to end of ad video
+        if (video.duration && isFinite(video.duration) && video.duration > 0) {
+          try {
+            video.currentTime = video.duration;
+          } catch (e) {
+            // Handled silently if video element restricts seeking
+          }
+        }
+      }
+
+      // 3. Close banner overlay ads
+      if (settings.autoCloseBanners) {
+        for (const sel of BANNER_SELECTORS) {
+          const bannerButtons = document.querySelectorAll(sel);
+          for (const closeBtn of bannerButtons) {
+            if (closeBtn && closeBtn.offsetParent !== null) {
+              triggerClick(closeBtn);
+            }
+          }
+        }
+      }
+    } else {
+      // Normal playback: restore audio and playback rate
+      if (isCurrentlyInAd) {
+        isCurrentlyInAd = false;
+        console.log('[AutoSkipAds] Ad ended. Restored normal playback.');
+      }
+
+      if (video) {
+        if (video.__adSkipperMuted) {
+          video.muted = false;
+          video.__adSkipperMuted = false;
+        }
+        if (video.playbackRate === 16) {
+          video.playbackRate = 1;
         }
       }
     }
   }
 
-  // Initialize observer and polling timer
-  function initialize() {
+  // Initialize listeners
+  function init() {
     loadSettings();
 
-    // 1. MutationObserver on document body to catch DOM updates instantly
+    // 1. MutationObserver for instant reaction
     const observer = new MutationObserver(() => {
-      scanAndSkip();
+      handleAds();
     });
 
     observer.observe(document.body || document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'style']
+      attributeFilter: ['class', 'src']
     });
 
-    // 2. Fallback timer (interval 350ms) to ensure continuous monitoring
-    setInterval(scanAndSkip, 350);
+    // 2. High-frequency polling fallback (250ms)
+    setInterval(handleAds, 250);
 
-    // 3. YouTube SPA navigation listeners
-    window.addEventListener('yt-navigate-finish', scanAndSkip);
-    window.addEventListener('yt-page-data-updated', scanAndSkip);
+    // 3. YouTube SPA navigation events
+    window.addEventListener('yt-navigate-finish', handleAds);
+    window.addEventListener('yt-page-data-updated', handleAds);
   }
 
-  // Start extension logic when DOM is ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initialize);
+    document.addEventListener('DOMContentLoaded', init);
   } else {
-    initialize();
+    init();
   }
+
+  // Handle SPA URL transitions
+  let currentUrl = location.href;
+  new MutationObserver(() => {
+    if (location.href !== currentUrl) {
+      currentUrl = location.href;
+      setTimeout(handleAds, 300);
+    }
+  }).observe(document, { subtree: true, childList: true });
 })();
