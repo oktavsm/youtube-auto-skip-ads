@@ -8,16 +8,15 @@ Dengan metode ini, YouTube tidak akan mendeteksi penggunaan ad-blocker karena vi
 
 ## Fitur Utama
 
-- **Otomatis Klik Tombol Skip**: Mendukung berbagai selector tombol skip YouTube (versi modern maupun versi lama).
-- **Tutup Banner Overlay**: Menutup pop-up banner iklan yang muncul di atas pemutar video.
+- **Otomatis Klik Tombol Skip Murni**: Mendeteksi dan mengeklik tombol lewati iklan secara instan sesaat setelah muncul di layar.
+- **Tutup Banner Overlay**: Menutup pop-up banner iklan yang muncul di atas pemutar video secara otomatis.
 - **Tanpa Ad-Block Triggers**: Tidak memblokir network request atau script analitik YouTube, sehingga terhindar dari deteksi anti-adblock.
+- **Tanpa Stutter / 403 Forbidden**: Membiarkan video iklan mengalir alami pada kecepatan standar tanpa memodifikasi rate buffer CDN, mencegah error buffer macet.
 - **Counter Iklan Dilewati**: Menghitung berapa banyak iklan yang telah dilewati secara real-time.
 - **Pengaturan Fleksibel**:
   - Auto-Skip Tombol Iklan (Aktif secara default)
   - Tutup Banner Iklan (Aktif secara default)
-  - Percepat Iklan 16x (Opsional)
   - Bisukan Audio Iklan (Opsional)
-- **Ringan dan Efisien**: Menggunakan kombinasi `MutationObserver` dan polling interval rendah untuk memastikan responsivitas instan tanpa membebani CPU.
 
 ---
 
@@ -55,7 +54,7 @@ Dengan metode ini, YouTube tidak akan mendeteksi penggunaan ad-blocker karena vi
 ```text
 auto-skip-ads-ext/
 |-- manifest.json          # Konfigurasi Manifest V3 ekstensi
-|-- content.js             # Skrip automasi deteksi & klik tombol skip
+|-- content.js             # Skrip automasi deteksi & klik tombol skip murni
 |-- popup/
 |   |-- popup.html         # Tampilan UI menu kontrol ekstensi
 |   |-- popup.css          # Desain dan tata letak UI popup

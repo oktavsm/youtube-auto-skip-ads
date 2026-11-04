@@ -37,7 +37,7 @@
 
 body {
   width: 320px;
-  min-height: 420px;
+  min-height: 320px;
   font-family: var(--font-family);
   background-color: var(--bg-app);
   color: var(--text-primary);

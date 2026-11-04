@@ -4,7 +4,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
   const toggleEnabled = document.getElementById('toggleEnabled');
   const toggleBanners = document.getElementById('toggleBanners');
-  const toggleFastForward = document.getElementById('toggleFastForward');
   const toggleMute = document.getElementById('toggleMute');
   const skipCountDisplay = document.getElementById('skipCountDisplay');
   const resetStatsBtn = document.getElementById('resetStatsBtn');
@@ -14,8 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const DEFAULTS = {
     enabled: true,
     autoCloseBanners: true,
-    fastForwardAd: true,
-    autoMuteAd: true,
+    autoMuteAd: false,
     skipCount: 0
   };
 
@@ -39,7 +37,6 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get(DEFAULTS, (data) => {
       toggleEnabled.checked = data.enabled;
       toggleBanners.checked = data.autoCloseBanners;
-      toggleFastForward.checked = data.fastForwardAd;
       toggleMute.checked = data.autoMuteAd;
 
       skipCountDisplay.textContent = Number(data.skipCount || 0).toLocaleString('id-ID');
@@ -58,10 +55,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     toggleBanners.addEventListener('change', () => {
       chrome.storage.local.set({ autoCloseBanners: toggleBanners.checked });
-    });
-
-    toggleFastForward.addEventListener('change', () => {
-      chrome.storage.local.set({ fastForwardAd: toggleFastForward.checked });
     });
 
     toggleMute.addEventListener('change', () => {
