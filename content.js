@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] Smart multi-ad skip controller loaded.');
+  console.log('[AutoSkipAds] Verified Skip Clicker loaded.');
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -13,33 +13,22 @@
 
   let settings = { ...DEFAULT_SETTINGS };
   let originalPlaybackRate = 1;
-  let lastClickedElement = null;
-  let lastClickTimestamp = 0;
   let lastBannerCloseTime = 0;
   let isProcessing = false;
   let throttleTimer = null;
 
-  // Complete list of modern and legacy skip selectors
-  const SKIP_SELECTORS = [
-    '.ytp-ad-skip-button-modern',
-    '.ytp-skip-ad-button',
-    '.ytp-ad-skip-button',
+  // Strict list of actual button elements (never match wrapper divs or slots)
+  const SKIP_BUTTON_SELECTORS = [
     'button.ytp-ad-skip-button-modern',
-    'button.ytp-skip-ad-button',
     'button.ytp-ad-skip-button',
-    '.ytp-ad-skip-button-container button',
+    'button.ytp-skip-ad-button',
+    '.ytp-ad-skip-button-modern.ytp-button',
+    '.ytp-ad-skip-button.ytp-button',
+    '.ytp-skip-ad-button.ytp-button',
     '.ytp-ad-skip-button-slot button',
-    '.ytp-ad-skip-button-icon-modern',
-    'button.ytp-ad-skip-button-text',
-    '[class*="ytp-ad-skip-button"]',
-    '[class*="skip-ad-button"]',
-    'button[class*="skip-ad"]',
-    'button[class*="skip_ad"]',
+    '.ytp-ad-skip-button-container button',
     'button[aria-label*="Skip"]',
     'button[aria-label*="Lewati"]',
-    'div[aria-label*="Skip"]',
-    'div[aria-label*="Lewati"]',
-    '[id^="skip-button:"]',
     '[id^="skip-button:"] button',
     '.videoAdUiSkipButton'
   ];
@@ -48,9 +37,7 @@
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container button',
-    '.ytp-ad-overlay-close-container',
     '.ytp-ad-text-overlay .ytp-ad-overlay-close-container button',
-    '[class*="overlay-close"]',
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
@@ -65,7 +52,7 @@
     }
   }
 
-  // Real-time settings listener
+  // Real-time settings sync
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'local') {
@@ -78,7 +65,7 @@
     });
   }
 
-  // Check if player is currently in ad state
+  // Check if YouTube player is currently presenting an ad
   function isAdShowing() {
     const player = document.querySelector('#movie_player, .html5-video-player');
     if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
@@ -103,69 +90,17 @@
     }
   }
 
-  // Execute full click sequence on element, its button parent, or child button
-  function performClick(target) {
-    if (!target) return;
-
-    try {
-      // 1. Direct native click
-      target.click();
-
-      const parentBtn = target.closest('button, [role="button"]');
-      if (parentBtn && parentBtn !== target) parentBtn.click();
-
-      const childBtn = target.querySelector('button, [role="button"]');
-      if (childBtn && childBtn !== target) childBtn.click();
-
-      // 2. Dispatch simulated pointer & mouse events
-      const rect = target.getBoundingClientRect();
-      const clientX = rect.left + rect.width / 2;
-      const clientY = rect.top + rect.height / 2;
-      const opts = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY
-      };
-
-      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((evt) => {
-        target.dispatchEvent(new MouseEvent(evt, opts));
-        if (parentBtn && parentBtn !== target) parentBtn.dispatchEvent(new MouseEvent(evt, opts));
-        if (childBtn && childBtn !== target) childBtn.dispatchEvent(new MouseEvent(evt, opts));
-      });
-    } catch (e) {
-      // Handled silently
-    }
-  }
-
-  // Find all visible skip buttons via CSS selectors
-  function findSkipButtonsBySelector() {
-    const list = [];
-    for (const sel of SKIP_SELECTORS) {
-      const elements = document.querySelectorAll(sel);
-      for (const el of elements) {
-        if (el && el.offsetParent !== null) {
-          list.push(el);
-        }
-      }
-    }
-    return list;
-  }
-
-  // Fallback finder by inspecting button text ("Skip", "Lewati")
-  function findSkipButtonByText() {
+  // Fallback search only for genuine button elements containing "Skip" or "Lewati"
+  function findFallbackSkipButton() {
     const player = document.querySelector('#movie_player, .video-ads, .ytp-ad-module');
     if (!player) return null;
 
-    const candidates = player.querySelectorAll('button, [role="button"], div, span');
-    for (const el of candidates) {
-      if (el && el.offsetParent !== null) {
-        const text = (el.textContent || '').trim().toLowerCase();
-        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-        // Check if element contains skip keywords
+    const buttons = player.querySelectorAll('button, [role="button"]');
+    for (const btn of buttons) {
+      if (btn && btn.offsetParent !== null) {
+        const text = (btn.textContent || '').trim().toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
         if (
-          text === 'skip' ||
           text.startsWith('skip') ||
           text.includes('skip ad') ||
           text.includes('lewati') ||
@@ -173,37 +108,58 @@
           aria.includes('skip ad') ||
           aria.includes('lewati')
         ) {
-          return el;
+          return btn;
         }
       }
     }
     return null;
   }
 
-  // Click skip button with per-element debounce (supports Ad 1, Ad 2, Ad 3 seamlessly)
+  // Try to click the genuine skip button
   function tryClickSkip() {
-    const now = Date.now();
+    let skipBtn = null;
 
-    // 1. Gather all candidate skip elements
-    const buttons = findSkipButtonsBySelector();
-    const textFallbackBtn = findSkipButtonByText();
-    if (textFallbackBtn && !buttons.includes(textFallbackBtn)) {
-      buttons.push(textFallbackBtn);
+    // 1. Check strict button selectors
+    for (const sel of SKIP_BUTTON_SELECTORS) {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null) {
+        skipBtn = el;
+        break;
+      }
     }
 
-    for (const btn of buttons) {
-      // If the exact same element was clicked less than 1 second ago, avoid spamming
-      if (btn === lastClickedElement && (now - lastClickTimestamp < 1000)) {
-        continue;
+    // 2. Fallback search by text only on button elements
+    if (!skipBtn) {
+      skipBtn = findFallbackSkipButton();
+    }
+
+    // 3. Click the real button once
+    if (skipBtn && !skipBtn.__clickedByExtension) {
+      skipBtn.__clickedByExtension = true;
+
+      console.log('[AutoSkipAds] Real Skip button found:', skipBtn.tagName, skipBtn.className);
+
+      // Native click
+      skipBtn.click();
+
+      // Dispatch simulated pointer and mouse events directly to the button
+      try {
+        const rect = skipBtn.getBoundingClientRect();
+        const opts = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2
+        };
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((evt) => {
+          skipBtn.dispatchEvent(new MouseEvent(evt, opts));
+        });
+      } catch (e) {
+        // Handled silently
       }
 
-      // New element or cooldown passed: Click it immediately!
-      lastClickedElement = btn;
-      lastClickTimestamp = now;
-
-      performClick(btn);
       incrementSkipCounter();
-      console.log('[AutoSkipAds] Skip button clicked successfully.');
       return true;
     }
 
@@ -218,14 +174,12 @@
     if (now - lastBannerCloseTime < 1000) return;
 
     for (const sel of BANNER_SELECTORS) {
-      const elements = document.querySelectorAll(sel);
-      for (const closeBtn of elements) {
-        if (closeBtn && closeBtn.offsetParent !== null) {
-          lastBannerCloseTime = now;
-          closeBtn.click();
-          console.log('[AutoSkipAds] Banner closed.');
-          return;
-        }
+      const closeBtn = document.querySelector(sel);
+      if (closeBtn && closeBtn.offsetParent !== null) {
+        lastBannerCloseTime = now;
+        closeBtn.click();
+        console.log('[AutoSkipAds] Banner closed.');
+        return;
       }
     }
   }
@@ -264,7 +218,7 @@
     }
   }
 
-  // Core scan routine protected against re-entrancy
+  // Main scan routine protected against re-entrancy
   function handleAds() {
     if (isProcessing || !settings.enabled) return;
     isProcessing = true;
