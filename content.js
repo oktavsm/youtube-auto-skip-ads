@@ -127,18 +127,40 @@
 
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
 
-    // 1. Manage Playback Speed and Audio
+    // 1. Manage Playback Speed, End-of-Ad Handshake, and Audio
     if (video) {
       if (isAdActive) {
-        // Adjust speed if enabled
-        if (settings.speedUpAd && Number(settings.adSpeed) > 1) {
-          const targetSpeed = Math.min(16, Math.max(1, Number(settings.adSpeed)));
-          if (video.playbackRate !== targetSpeed) {
-            if (!video.__adRateApplied) {
-              originalPlaybackRate = video.playbackRate || 1;
+        const hasValidDuration = video.duration && isFinite(video.duration);
+        // Near end threshold: last 0.5s of the ad
+        const isNearEnd = hasValidDuration && (video.currentTime >= video.duration - 0.5);
+
+        if (isNearEnd || video.ended) {
+          // Slow down back to 1.0x so YouTube's internal engine handles the transition cleanly
+          if (video.playbackRate !== 1) {
+            video.playbackRate = 1;
+          }
+          // If video paused or stuck on the last frame of ad, kick playback
+          if (video.paused) {
+            video.play().catch(() => {});
+            const playBtn = document.querySelector('button.ytp-play-button');
+            if (playBtn) playBtn.click();
+          }
+        } else {
+          // Speed up during active ad playback
+          if (settings.speedUpAd && Number(settings.adSpeed) > 1) {
+            const targetSpeed = Math.min(16, Math.max(1, Number(settings.adSpeed)));
+            if (video.playbackRate !== targetSpeed) {
+              if (!video.__adRateApplied) {
+                originalPlaybackRate = (video.playbackRate && video.playbackRate <= 2) ? video.playbackRate : 1;
+              }
+              video.playbackRate = targetSpeed;
+              video.__adRateApplied = true;
             }
-            video.playbackRate = targetSpeed;
-            video.__adRateApplied = true;
+          }
+
+          // Ensure video continues playing if paused mid-ad
+          if (video.paused) {
+            video.play().catch(() => {});
           }
         }
 
@@ -148,7 +170,7 @@
           video.__adSkipperMuted = true;
         }
       } else {
-        // Normal video playback: restore speed and audio
+        // Normal video playback: restore user speed and audio
         if (video.__adRateApplied) {
           video.playbackRate = originalPlaybackRate || 1;
           video.__adRateApplied = false;
@@ -207,8 +229,8 @@
       attributeFilter: ['class', 'style', 'aria-hidden']
     });
 
-    // Frequent polling fallback (150ms)
-    setInterval(handleAds, 150);
+    // Frequent polling fallback (120ms)
+    setInterval(handleAds, 120);
 
     // YouTube SPA navigation events
     window.addEventListener('yt-navigate-finish', handleAds);
@@ -226,7 +248,7 @@
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
       currentUrl = location.href;
-      setTimeout(handleAds, 150);
+      setTimeout(handleAds, 120);
     }
   }).observe(document, { subtree: true, childList: true });
 })();
