@@ -102,16 +102,37 @@
     }
   }
 
+  // Find any visible skip button in the DOM
+  function findVisibleSkipButton() {
+    for (const sel of SKIP_SELECTORS) {
+      const elements = document.querySelectorAll(sel);
+      for (const btn of elements) {
+        if (btn && btn.offsetParent !== null) {
+          return btn;
+        }
+      }
+    }
+    return null;
+  }
+
   // Core handler running on every tick / mutation
   function handleAds() {
     if (!settings.enabled) return;
 
-    // Detect if YouTube is currently presenting an ad
     const player = document.querySelector('#movie_player, .html5-video-player');
-    const adShowing =
+    const adModule = document.querySelector('.video-ads.ytp-ad-module');
+    const hasAdModuleContent = adModule && adModule.children.length > 0;
+
+    // Detect ad state through multiple indicators
+    const isPlayerInAdState =
       (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) ||
       document.querySelector('.ytp-ad-player-overlay') !== null ||
-      document.querySelector('.ad-showing') !== null;
+      document.querySelector('.ytp-ad-text') !== null ||
+      document.querySelector('.ad-showing') !== null ||
+      hasAdModuleContent;
+
+    const visibleSkipBtn = findVisibleSkipButton();
+    const adShowing = isPlayerInAdState || visibleSkipBtn !== null;
 
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
 
@@ -122,7 +143,10 @@
         console.log('[AutoSkipAds] Ad detected. Skipping...');
       }
 
-      // 1. Click skip button if available in DOM
+      // 1. Click skip button if present
+      if (visibleSkipBtn) {
+        triggerClick(visibleSkipBtn);
+      }
       for (const sel of SKIP_SELECTORS) {
         const elements = document.querySelectorAll(sel);
         for (const btn of elements) {
