@@ -63,6 +63,48 @@
         </label>
       </div>
 
+      <!-- Speed Up Ad Toggle -->
+      <div class="setting-row">
+        <div class="setting-text">
+          <label for="toggleSpeed" class="setting-title">Percepat Video Iklan</label>
+          <span class="setting-desc">Putar lebih cepat saat iklan berlangsung</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleSpeed" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Speed Slider Group -->
+      <div id="speedSliderGroup" class="speed-slider-group">
+        <div class="speed-header">
+          <span class="speed-label">Kelipatan Kecepatan</span>
+          <span id="speedValueBadge" class="speed-badge">4x</span>
+        </div>
+        <input 
+          type="range" 
+          id="speedSlider" 
+          class="range-slider" 
+          min="1" 
+          max="16" 
+          step="1" 
+          value="4" 
+          aria-label="Pengatur Kecepatan Iklan"
+          aria-valuemin="1" 
+          aria-valuemax="16" 
+          aria-valuenow="4"
+        >
+        <div class="speed-ticks">
+          <span>1x</span>
+          <span>2x</span>
+          <span>4x</span>
+          <span>8x</span>
+          <span>12x</span>
+          <span>16x</span>
+        </div>
+        <span class="speed-hint">Saran: 2x - 4x untuk kestabilan buffer CDN YouTube</span>
+      </div>
+
       <!-- Auto Mute Ad (Optional) -->
       <div class="setting-row">
         <div class="setting-text">

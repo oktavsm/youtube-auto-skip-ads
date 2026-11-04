@@ -1,19 +1,22 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] Pure auto-skip clicker active on YouTube.');
+  console.log('[AutoSkipAds] Pure auto-skip and speed-control active on YouTube.');
 
   const DEFAULT_SETTINGS = {
     enabled: true,
     autoCloseBanners: true,
+    speedUpAd: true,
+    adSpeed: 4,
     autoMuteAd: false
   };
 
   let settings = { ...DEFAULT_SETTINGS };
   let lastSkippedTimestamp = 0;
   const SKIP_DEBOUNCE_MS = 1000;
+  let originalPlaybackRate = 1;
 
-  // Complete selector list for modern and legacy YouTube skip buttons
+  // Selectors for YouTube skip buttons
   const SKIP_SELECTORS = [
     '.ytp-skip-ad-button',
     '.ytp-ad-skip-button',
@@ -68,7 +71,7 @@
     });
   }
 
-  // Trigger click on element, child button, and parent button with synthetic mouse events
+  // Robust click trigger
   function triggerClick(el) {
     if (!el) return false;
     try {
@@ -111,13 +114,53 @@
     }
   }
 
-  // Main handler: purely detects and clicks skip buttons without modifying playbackRate or currentTime
-  function handleAutoSkip() {
+  // Main tick handler
+  function handleAds() {
     if (!settings.enabled) return;
 
     const now = Date.now();
+    const player = document.querySelector('#movie_player, .html5-video-player');
+    const isAdActive =
+      (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) ||
+      document.querySelector('.ytp-ad-player-overlay') !== null ||
+      document.querySelector('.ad-showing') !== null;
 
-    // 1. Check for Skip Button
+    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+
+    // 1. Manage Playback Speed and Audio
+    if (video) {
+      if (isAdActive) {
+        // Adjust speed if enabled
+        if (settings.speedUpAd && Number(settings.adSpeed) > 1) {
+          const targetSpeed = Math.min(16, Math.max(1, Number(settings.adSpeed)));
+          if (video.playbackRate !== targetSpeed) {
+            if (!video.__adRateApplied) {
+              originalPlaybackRate = video.playbackRate || 1;
+            }
+            video.playbackRate = targetSpeed;
+            video.__adRateApplied = true;
+          }
+        }
+
+        // Auto mute if enabled
+        if (settings.autoMuteAd && !video.muted) {
+          video.muted = true;
+          video.__adSkipperMuted = true;
+        }
+      } else {
+        // Normal video playback: restore speed and audio
+        if (video.__adRateApplied) {
+          video.playbackRate = originalPlaybackRate || 1;
+          video.__adRateApplied = false;
+        }
+        if (video.__adSkipperMuted) {
+          video.muted = false;
+          video.__adSkipperMuted = false;
+        }
+      }
+    }
+
+    // 2. Scan and click Skip Buttons if present and visible
     for (const sel of SKIP_SELECTORS) {
       const elements = document.querySelectorAll(sel);
       for (const btn of elements) {
@@ -135,7 +178,7 @@
       }
     }
 
-    // 2. Check for Overlay Banners
+    // 3. Scan and close Overlay Banners if enabled
     if (settings.autoCloseBanners) {
       for (const sel of BANNER_SELECTORS) {
         const banners = document.querySelectorAll(sel);
@@ -146,35 +189,15 @@
         }
       }
     }
-
-    // 3. Optional Auto Mute during ad playback
-    if (settings.autoMuteAd) {
-      const player = document.querySelector('#movie_player, .html5-video-player');
-      const inAd =
-        (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) ||
-        document.querySelector('.ytp-ad-player-overlay') !== null ||
-        document.querySelector('.ad-showing') !== null;
-
-      const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-      if (video) {
-        if (inAd && !video.muted) {
-          video.muted = true;
-          video.__adSkipperMuted = true;
-        } else if (!inAd && video.__adSkipperMuted) {
-          video.muted = false;
-          video.__adSkipperMuted = false;
-        }
-      }
-    }
   }
 
   // Initialize
   function init() {
     loadSettings();
 
-    // Observer for immediate reaction when skip button enters DOM
+    // Instant DOM observer
     const observer = new MutationObserver(() => {
-      handleAutoSkip();
+      handleAds();
     });
 
     observer.observe(document.body || document.documentElement, {
@@ -184,12 +207,12 @@
       attributeFilter: ['class', 'style', 'aria-hidden']
     });
 
-    // High frequency interval (150ms) as reliable fallback
-    setInterval(handleAutoSkip, 150);
+    // Frequent polling fallback (150ms)
+    setInterval(handleAds, 150);
 
     // YouTube SPA navigation events
-    window.addEventListener('yt-navigate-finish', handleAutoSkip);
-    window.addEventListener('yt-page-data-updated', handleAutoSkip);
+    window.addEventListener('yt-navigate-finish', handleAds);
+    window.addEventListener('yt-page-data-updated', handleAds);
   }
 
   if (document.readyState === 'loading') {
@@ -203,7 +226,7 @@
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
       currentUrl = location.href;
-      setTimeout(handleAutoSkip, 150);
+      setTimeout(handleAds, 150);
     }
   }).observe(document, { subtree: true, childList: true });
 })();

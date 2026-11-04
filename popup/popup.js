@@ -4,6 +4,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
   const toggleEnabled = document.getElementById('toggleEnabled');
   const toggleBanners = document.getElementById('toggleBanners');
+  const toggleSpeed = document.getElementById('toggleSpeed');
+  const speedSliderGroup = document.getElementById('speedSliderGroup');
+  const speedSlider = document.getElementById('speedSlider');
+  const speedValueBadge = document.getElementById('speedValueBadge');
   const toggleMute = document.getElementById('toggleMute');
   const skipCountDisplay = document.getElementById('skipCountDisplay');
   const resetStatsBtn = document.getElementById('resetStatsBtn');
@@ -13,6 +17,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const DEFAULTS = {
     enabled: true,
     autoCloseBanners: true,
+    speedUpAd: true,
+    adSpeed: 4,
     autoMuteAd: false,
     skipCount: 0
   };
@@ -28,6 +34,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Update speed group active/disabled appearance
+  function updateSpeedSliderState(isEnabled) {
+    if (isEnabled) {
+      speedSliderGroup.classList.remove('disabled');
+      speedSlider.disabled = false;
+    } else {
+      speedSliderGroup.classList.add('disabled');
+      speedSlider.disabled = true;
+    }
+  }
+
   // Load stored settings and statistics
   function initUI() {
     if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
@@ -37,8 +54,15 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get(DEFAULTS, (data) => {
       toggleEnabled.checked = data.enabled;
       toggleBanners.checked = data.autoCloseBanners;
+      toggleSpeed.checked = data.speedUpAd;
       toggleMute.checked = data.autoMuteAd;
 
+      const currentSpeed = data.adSpeed || 4;
+      speedSlider.value = currentSpeed;
+      speedSlider.setAttribute('aria-valuenow', currentSpeed);
+      speedValueBadge.textContent = currentSpeed + 'x';
+
+      updateSpeedSliderState(data.speedUpAd);
       skipCountDisplay.textContent = Number(data.skipCount || 0).toLocaleString('id-ID');
       updateStatusBadge(data.enabled);
     });
@@ -55,6 +79,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     toggleBanners.addEventListener('change', () => {
       chrome.storage.local.set({ autoCloseBanners: toggleBanners.checked });
+    });
+
+    toggleSpeed.addEventListener('change', () => {
+      const isSpeedEnabled = toggleSpeed.checked;
+      updateSpeedSliderState(isSpeedEnabled);
+      chrome.storage.local.set({ speedUpAd: isSpeedEnabled });
+    });
+
+    speedSlider.addEventListener('input', () => {
+      const val = Number(speedSlider.value);
+      speedValueBadge.textContent = val + 'x';
+      speedSlider.setAttribute('aria-valuenow', val);
+      chrome.storage.local.set({ adSpeed: val });
     });
 
     toggleMute.addEventListener('change', () => {
