@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Skip YouTube Ads",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Otomatis menekan tombol lewati iklan di YouTube tanpa memblokir permintaan iklan.",
   "permissions": [
     "storage"
@@ -28,6 +28,17 @@
         "content.js"
       ],
       "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "injected.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
       "all_frames": true
     }
   ]

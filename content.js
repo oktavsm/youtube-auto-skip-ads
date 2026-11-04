@@ -69,11 +69,10 @@
     });
   }
 
-  // Robust visibility check that handles position:fixed, opacity:0.5, and modern grids
+  // Robust visibility check handling position:fixed, opacity:0.5, and modern grids
   function isVisible(el) {
     if (!el) return false;
 
-    // Modern standards-compliant visibility check
     if (typeof el.checkVisibility === 'function') {
       try {
         if (!el.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true })) {
@@ -165,7 +164,7 @@
     return null;
   }
 
-  // Dispatch full pointer, mouse, and keyboard click sequence to bypass synthetic filters
+  // Dispatch full pointer and mouse event chain with composed: true
   function clickSkipButton(btn) {
     if (!btn) return;
 
@@ -186,41 +185,43 @@
         innerText.click();
       }
 
-      // 4. Dispatch simulated PointerEvent and MouseEvent sequence with real coordinates
+      // 4. Dispatch simulated PointerEvent and MouseEvent sequence with real coordinates & composed: true
       const rect = btn.getBoundingClientRect();
       const clientX = rect.left + rect.width / 2;
       const clientY = rect.top + rect.height / 2;
-      const eventInit = {
+
+      const baseOpts = {
         bubbles: true,
         cancelable: true,
+        composed: true,
         view: window,
         detail: 1,
         screenX: clientX,
         screenY: clientY,
         clientX,
         clientY,
-        button: 0,
-        buttons: 1,
         pointerId: 1,
         pointerType: 'mouse',
         isPrimary: true
       };
 
       if (typeof PointerEvent === 'function') {
-        ['pointerover', 'pointerenter', 'pointerdown', 'pointerup'].forEach((type) => {
-          btn.dispatchEvent(new PointerEvent(type, eventInit));
-          if (innerText) innerText.dispatchEvent(new PointerEvent(type, eventInit));
-        });
+        btn.dispatchEvent(new PointerEvent('pointerover', { ...baseOpts, button: 0, buttons: 0 }));
+        btn.dispatchEvent(new PointerEvent('pointerenter', { ...baseOpts, button: 0, buttons: 0 }));
+        btn.dispatchEvent(new PointerEvent('pointerdown', { ...baseOpts, button: 0, buttons: 1 }));
       }
+      btn.dispatchEvent(new MouseEvent('mouseover', { ...baseOpts, button: 0, buttons: 0 }));
+      btn.dispatchEvent(new MouseEvent('mousedown', { ...baseOpts, button: 0, buttons: 1 }));
 
-      ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click'].forEach((type) => {
-        btn.dispatchEvent(new MouseEvent(type, eventInit));
-        if (innerText) innerText.dispatchEvent(new MouseEvent(type, eventInit));
-      });
+      if (typeof PointerEvent === 'function') {
+        btn.dispatchEvent(new PointerEvent('pointerup', { ...baseOpts, button: 0, buttons: 0 }));
+      }
+      btn.dispatchEvent(new MouseEvent('mouseup', { ...baseOpts, button: 0, buttons: 0 }));
+      btn.dispatchEvent(new MouseEvent('click', { ...baseOpts, button: 0, buttons: 0 }));
 
-      // 5. Simulate keyboard activation (Enter & Space)
-      btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      btn.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      if (innerText) {
+        innerText.dispatchEvent(new MouseEvent('click', { ...baseOpts, button: 0, buttons: 0 }));
+      }
     } catch (e) {
       // Handled silently
     }
@@ -245,7 +246,6 @@
     if (adActive) {
       if (settings.speedUpAd && Number(settings.adSpeed) > 1) {
         const targetSpeed = Math.min(16, Math.max(1, Number(settings.adSpeed)));
-        // Ease back to 1.0x near the end to avoid freezing on final frame
         const nearEnd = video.duration && (video.duration - video.currentTime <= 0.5);
         const effectiveSpeed = nearEnd ? 1.0 : targetSpeed;
 
@@ -297,13 +297,25 @@
           console.log('[AutoSkipAds] Ad active with signature:', signature);
         }
 
-        // Continuously try to click skip button while ad is active
-        const now = Date.now();
-        if (now - lastSkipClickTime >= 150) {
-          const skipBtn = findSkipButton();
-          if (skipBtn) {
+        // Check if skip button is present in DOM
+        const skipBtn = findSkipButton();
+        if (skipBtn) {
+          const now = Date.now();
+          if (now - lastSkipClickTime >= 150) {
             lastSkipClickTime = now;
             clickSkipButton(skipBtn);
+            document.dispatchEvent(new CustomEvent('__AutoSkipAds_TriggerSkip'));
+          }
+
+          // Advance ad timeline to end once skip button is active
+          // Guarantees skip even if YouTube listener blocks synthetic click via isTrusted
+          const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+          if (video && isFinite(video.duration) && video.duration > 0 && video.currentTime > 0) {
+            if (video.duration - video.currentTime > 0.5) {
+              console.log('[AutoSkipAds] Skip button present: advancing ad timeline to end.');
+              video.currentTime = Math.max(0, video.duration - 0.1);
+              video.play().catch(() => {});
+            }
           }
         }
 
