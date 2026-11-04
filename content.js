@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] Pure auto-skip and speed-control active on YouTube.');
+  console.log('[AutoSkipAds] Robust auto-skip controller loaded.');
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -12,9 +12,12 @@
   };
 
   let settings = { ...DEFAULT_SETTINGS };
-  let lastSkippedTimestamp = 0;
-  const SKIP_DEBOUNCE_MS = 1000;
   let originalPlaybackRate = 1;
+  let lastSkipTime = 0;
+  const SKIP_COOLDOWN_MS = 1500;
+  let lastBannerCloseTime = 0;
+  let isProcessing = false;
+  let throttleTimer = null;
 
   // Selectors for YouTube skip buttons
   const SKIP_SELECTORS = [
@@ -37,7 +40,7 @@
     '.videoAdUiSkipButton'
   ];
 
-  // Overlay and banner close selectors
+  // Selectors for banner and overlay close buttons
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container button',
@@ -47,7 +50,7 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
-  // Load stored settings
+  // Load settings from storage
   function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
@@ -58,7 +61,7 @@
     }
   }
 
-  // Real-time settings listener
+  // Real-time settings sync
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'local') {
@@ -71,37 +74,19 @@
     });
   }
 
-  // Robust click trigger
-  function triggerClick(el) {
-    if (!el) return false;
-    try {
-      el.click();
-
-      const child = el.querySelector('button');
-      if (child) child.click();
-
-      const parent = el.closest('button');
-      if (parent && parent !== el) parent.click();
-
-      const rect = el.getBoundingClientRect();
-      const clientX = rect.left + rect.width / 2;
-      const clientY = rect.top + rect.height / 2;
-      const opts = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY
-      };
-
-      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((evtType) => {
-        el.dispatchEvent(new MouseEvent(evtType, opts));
-        if (child) child.dispatchEvent(new MouseEvent(evtType, opts));
-      });
+  // Check if player is currently in ad state
+  function isAdShowing() {
+    const player = document.querySelector('#movie_player, .html5-video-player');
+    if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
       return true;
-    } catch (e) {
-      return false;
     }
+    if (document.querySelector('.ytp-ad-player-overlay') !== null) {
+      return true;
+    }
+    if (document.querySelector('.ad-showing') !== null) {
+      return true;
+    }
+    return false;
   }
 
   // Increment skip counter in storage
@@ -114,123 +99,123 @@
     }
   }
 
-  // Main tick handler
-  function handleAds() {
-    if (!settings.enabled) return;
+  // Click skip button once with strict debouncing
+  function tryClickSkip() {
+    const now = Date.now();
+    if (now - lastSkipTime < SKIP_COOLDOWN_MS) return false;
+
+    for (const sel of SKIP_SELECTORS) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) {
+        lastSkipTime = now;
+
+        // Perform clean click without recursive event storms
+        btn.click();
+        const childBtn = btn.querySelector('button');
+        if (childBtn) childBtn.click();
+
+        incrementSkipCounter();
+        console.log('[AutoSkipAds] Skip button clicked successfully.');
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Close overlay banners
+  function tryCloseBanners() {
+    if (!settings.autoCloseBanners) return;
 
     const now = Date.now();
-    const player = document.querySelector('#movie_player, .html5-video-player');
-    const isAdActive =
-      (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) ||
-      document.querySelector('.ytp-ad-player-overlay') !== null ||
-      document.querySelector('.ad-showing') !== null;
+    if (now - lastBannerCloseTime < 1000) return;
 
+    for (const sel of BANNER_SELECTORS) {
+      const closeBtn = document.querySelector(sel);
+      if (closeBtn && closeBtn.offsetParent !== null) {
+        lastBannerCloseTime = now;
+        closeBtn.click();
+        console.log('[AutoSkipAds] Banner closed.');
+        break;
+      }
+    }
+  }
+
+  // Manage playback speed and audio safely
+  function handlePlaybackRate(adActive) {
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+    if (!video) return;
 
-    // 1. Manage Playback Speed, End-of-Ad Handshake, and Audio
-    if (video) {
-      if (isAdActive) {
-        const hasValidDuration = video.duration && isFinite(video.duration);
-        // Near end threshold: last 0.5s of the ad
-        const isNearEnd = hasValidDuration && (video.currentTime >= video.duration - 0.5);
-
-        if (isNearEnd || video.ended) {
-          // Slow down back to 1.0x so YouTube's internal engine handles the transition cleanly
-          if (video.playbackRate !== 1) {
-            video.playbackRate = 1;
+    if (adActive) {
+      if (settings.speedUpAd && Number(settings.adSpeed) > 1) {
+        const targetSpeed = Math.min(16, Math.max(1, Number(settings.adSpeed)));
+        if (video.playbackRate !== targetSpeed) {
+          if (!video.__adRateApplied) {
+            originalPlaybackRate = (video.playbackRate && video.playbackRate <= 2) ? video.playbackRate : 1;
           }
-          // If video paused or stuck on the last frame of ad, kick playback
-          if (video.paused) {
-            video.play().catch(() => {});
-            const playBtn = document.querySelector('button.ytp-play-button');
-            if (playBtn) playBtn.click();
-          }
-        } else {
-          // Speed up during active ad playback
-          if (settings.speedUpAd && Number(settings.adSpeed) > 1) {
-            const targetSpeed = Math.min(16, Math.max(1, Number(settings.adSpeed)));
-            if (video.playbackRate !== targetSpeed) {
-              if (!video.__adRateApplied) {
-                originalPlaybackRate = (video.playbackRate && video.playbackRate <= 2) ? video.playbackRate : 1;
-              }
-              video.playbackRate = targetSpeed;
-              video.__adRateApplied = true;
-            }
-          }
-
-          // Ensure video continues playing if paused mid-ad
-          if (video.paused) {
-            video.play().catch(() => {});
-          }
-        }
-
-        // Auto mute if enabled
-        if (settings.autoMuteAd && !video.muted) {
-          video.muted = true;
-          video.__adSkipperMuted = true;
-        }
-      } else {
-        // Normal video playback: restore user speed and audio
-        if (video.__adRateApplied) {
-          video.playbackRate = originalPlaybackRate || 1;
-          video.__adRateApplied = false;
-        }
-        if (video.__adSkipperMuted) {
-          video.muted = false;
-          video.__adSkipperMuted = false;
+          video.playbackRate = targetSpeed;
+          video.__adRateApplied = true;
         }
       }
-    }
 
-    // 2. Scan and click Skip Buttons if present and visible
-    for (const sel of SKIP_SELECTORS) {
-      const elements = document.querySelectorAll(sel);
-      for (const btn of elements) {
-        if (btn && btn.offsetParent !== null) {
-          const clicked = triggerClick(btn);
-          if (clicked) {
-            if (now - lastSkippedTimestamp > SKIP_DEBOUNCE_MS) {
-              lastSkippedTimestamp = now;
-              incrementSkipCounter();
-              console.log('[AutoSkipAds] Skip button clicked successfully.');
-            }
-            return;
-          }
-        }
+      if (settings.autoMuteAd && !video.muted) {
+        video.muted = true;
+        video.__adSkipperMuted = true;
+      }
+    } else {
+      // Normal video playback: restore speed and audio
+      if (video.__adRateApplied) {
+        video.playbackRate = originalPlaybackRate || 1;
+        video.__adRateApplied = false;
+      }
+      if (video.__adSkipperMuted) {
+        video.muted = false;
+        video.__adSkipperMuted = false;
       }
     }
+  }
 
-    // 3. Scan and close Overlay Banners if enabled
-    if (settings.autoCloseBanners) {
-      for (const sel of BANNER_SELECTORS) {
-        const banners = document.querySelectorAll(sel);
-        for (const closeBtn of banners) {
-          if (closeBtn && closeBtn.offsetParent !== null) {
-            triggerClick(closeBtn);
-          }
-        }
-      }
+  // Core scan routine protected against re-entrancy
+  function handleAds() {
+    if (isProcessing || !settings.enabled) return;
+    isProcessing = true;
+
+    try {
+      const adActive = isAdShowing();
+      handlePlaybackRate(adActive);
+      tryClickSkip();
+      tryCloseBanners();
+    } finally {
+      isProcessing = false;
     }
+  }
+
+  // Throttled scan runner to prevent CPU locking and page freeze
+  function requestScan() {
+    if (throttleTimer) return;
+    throttleTimer = setTimeout(() => {
+      throttleTimer = null;
+      handleAds();
+    }, 150);
   }
 
   // Initialize
   function init() {
     loadSettings();
 
-    // Instant DOM observer
+    // Observe DOM mutations with throttle to prevent lockup
     const observer = new MutationObserver(() => {
-      handleAds();
+      requestScan();
     });
 
     observer.observe(document.body || document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'style', 'aria-hidden']
+      attributeFilter: ['class']
     });
 
-    // Frequent polling fallback (120ms)
-    setInterval(handleAds, 120);
+    // Steady interval fallback (200ms)
+    setInterval(handleAds, 200);
 
     // YouTube SPA navigation events
     window.addEventListener('yt-navigate-finish', handleAds);
@@ -248,7 +233,7 @@
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
       currentUrl = location.href;
-      setTimeout(handleAds, 120);
+      setTimeout(handleAds, 150);
     }
   }).observe(document, { subtree: true, childList: true });
 })();
