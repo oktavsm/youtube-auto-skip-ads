@@ -12,19 +12,25 @@
 
   let settings = { ...DEFAULT_SETTINGS };
   let isCurrentlyInAd = false;
+  let originalPlaybackRate = 1;
 
-  // Modern and legacy skip button selectors
+  // Complete selector list for modern and legacy skip buttons
   const SKIP_SELECTORS = [
     '.ytp-skip-ad-button',
     '.ytp-ad-skip-button',
     '.ytp-ad-skip-button-modern',
+    '.ytp-ad-skip-button-container',
     '.ytp-ad-skip-button-container button',
+    '.ytp-ad-skip-button-slot',
     '.ytp-ad-skip-button-slot button',
     'button.ytp-ad-skip-button-text',
-    '[class*="skip-ad"]',
-    '[class*="skip_ad"]',
+    '[class*="skip-ad-button"]',
+    '[class*="ytp-ad-skip-button"]',
+    'button[class*="skip-ad"]',
+    'button[class*="skip_ad"]',
     'button[aria-label*="Skip"]',
     'button[aria-label*="Lewati"]',
+    '[id^="skip-button:"]',
     '[id^="skip-button:"] button',
     '.videoAdUiSkipButton'
   ];
@@ -38,7 +44,7 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
-  // Load settings from storage
+  // Load stored settings
   function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
@@ -49,7 +55,7 @@
     }
   }
 
-  // Real-time settings sync
+  // Real-time settings listener
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'local') {
@@ -62,7 +68,7 @@
     });
   }
 
-  // Trigger robust click on element and child buttons
+  // Robust click trigger for target, children, and parents with synthetic events
   function triggerClick(el) {
     if (!el) return false;
     try {
@@ -71,20 +77,25 @@
       const childBtn = el.querySelector('button');
       if (childBtn) childBtn.click();
 
+      const parentBtn = el.closest('button');
+      if (parentBtn && parentBtn !== el) parentBtn.click();
+
       const rect = el.getBoundingClientRect();
       const clientX = rect.left + rect.width / 2;
       const clientY = rect.top + rect.height / 2;
 
+      const eventOpts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY
+      };
+
       ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
-        const evt = new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX,
-          clientY
-        });
-        el.dispatchEvent(evt);
-        if (childBtn) childBtn.dispatchEvent(evt);
+        el.dispatchEvent(new MouseEvent(type, eventOpts));
+        if (childBtn) childBtn.dispatchEvent(new MouseEvent(type, eventOpts));
+        if (parentBtn) parentBtn.dispatchEvent(new MouseEvent(type, eventOpts));
       });
       return true;
     } catch (err) {
@@ -92,7 +103,7 @@
     }
   }
 
-  // Record stats
+  // Increment skipped ads counter
   function incrementSkipCounter() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get({ skipCount: 0 }, (data) => {
@@ -102,20 +113,21 @@
     }
   }
 
-  // Find any visible skip button in the DOM
-  function findVisibleSkipButton() {
+  // Find all visible skip buttons in the current DOM
+  function getVisibleSkipButtons() {
+    const list = [];
     for (const sel of SKIP_SELECTORS) {
       const elements = document.querySelectorAll(sel);
-      for (const btn of elements) {
-        if (btn && btn.offsetParent !== null) {
-          return btn;
+      for (const el of elements) {
+        if (el && el.offsetParent !== null) {
+          list.push(el);
         }
       }
     }
-    return null;
+    return list;
   }
 
-  // Core handler running on every tick / mutation
+  // Core handler running on every mutation & tick
   function handleAds() {
     if (!settings.enabled) return;
 
@@ -123,67 +135,53 @@
     const adModule = document.querySelector('.video-ads.ytp-ad-module');
     const hasAdModuleContent = adModule && adModule.children.length > 0;
 
-    // Detect ad state through multiple indicators
-    const isPlayerInAdState =
+    // Detect if an advertisement is active
+    const isPlayerInAd =
       (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) ||
       document.querySelector('.ytp-ad-player-overlay') !== null ||
-      document.querySelector('.ytp-ad-text') !== null ||
       document.querySelector('.ad-showing') !== null ||
       hasAdModuleContent;
 
-    const visibleSkipBtn = findVisibleSkipButton();
-    const adShowing = isPlayerInAdState || visibleSkipBtn !== null;
+    const visibleButtons = getVisibleSkipButtons();
+    const adShowing = isPlayerInAd || visibleButtons.length > 0;
 
-    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+    const videos = document.querySelectorAll('video');
 
     if (adShowing) {
       if (!isCurrentlyInAd) {
         isCurrentlyInAd = true;
         incrementSkipCounter();
-        console.log('[AutoSkipAds] Ad detected. Skipping...');
+        console.log('[AutoSkipAds] Ad detected. Handling playback and skipping...');
       }
 
-      // 1. Click skip button if present
-      if (visibleSkipBtn) {
-        triggerClick(visibleSkipBtn);
-      }
-      for (const sel of SKIP_SELECTORS) {
-        const elements = document.querySelectorAll(sel);
-        for (const btn of elements) {
-          if (btn && btn.offsetParent !== null) {
-            triggerClick(btn);
-          }
-        }
+      // 1. Immediately click any visible skip button
+      for (const btn of visibleButtons) {
+        triggerClick(btn);
       }
 
-      // 2. Fast-forward & mute video ad to bypass countdown and unskippable ads
-      if (video) {
-        // Mute during ad
+      // 2. Accelerate ad playback cleanly using 16x speed and mute
+      // Note: We deliberately do NOT set video.currentTime to duration,
+      // because forced seeks to unbuffered timestamps cause black screens
+      // and infinite buffering in modern YouTube MediaSource pipelines.
+      videos.forEach((video) => {
         if (settings.autoMuteAd && !video.muted) {
           video.muted = true;
           video.__adSkipperMuted = true;
         }
 
-        // Fast forward playback rate
-        if (settings.fastForwardAd && video.playbackRate < 16) {
-          video.playbackRate = 16;
-        }
-
-        // Seek directly to end of ad video
-        if (video.duration && isFinite(video.duration) && video.duration > 0) {
-          try {
-            video.currentTime = video.duration;
-          } catch (e) {
-            // Handled silently if video element restricts seeking
+        if (settings.fastForwardAd) {
+          if (video.playbackRate !== 16) {
+            originalPlaybackRate = video.playbackRate || 1;
+            video.playbackRate = 16;
           }
         }
-      }
+      });
 
       // 3. Close banner overlay ads
       if (settings.autoCloseBanners) {
         for (const sel of BANNER_SELECTORS) {
-          const bannerButtons = document.querySelectorAll(sel);
-          for (const closeBtn of bannerButtons) {
+          const banners = document.querySelectorAll(sel);
+          for (const closeBtn of banners) {
             if (closeBtn && closeBtn.offsetParent !== null) {
               triggerClick(closeBtn);
             }
@@ -191,25 +189,25 @@
         }
       }
     } else {
-      // Normal playback: restore audio and playback rate
+      // Normal playback: restore user playback rate and unmute if muted by extension
       if (isCurrentlyInAd) {
         isCurrentlyInAd = false;
-        console.log('[AutoSkipAds] Ad ended. Restored normal playback.');
+        console.log('[AutoSkipAds] Ad ended. Restored normal playback speed and volume.');
       }
 
-      if (video) {
+      videos.forEach((video) => {
         if (video.__adSkipperMuted) {
           video.muted = false;
           video.__adSkipperMuted = false;
         }
         if (video.playbackRate === 16) {
-          video.playbackRate = 1;
+          video.playbackRate = originalPlaybackRate || 1;
         }
-      }
+      });
     }
   }
 
-  // Initialize listeners
+  // Initialize
   function init() {
     loadSettings();
 
@@ -225,8 +223,8 @@
       attributeFilter: ['class', 'src']
     });
 
-    // 2. High-frequency polling fallback (250ms)
-    setInterval(handleAds, 250);
+    // 2. High-frequency polling (200ms)
+    setInterval(handleAds, 200);
 
     // 3. YouTube SPA navigation events
     window.addEventListener('yt-navigate-finish', handleAds);
@@ -244,7 +242,7 @@
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
       currentUrl = location.href;
-      setTimeout(handleAds, 300);
+      setTimeout(handleAds, 250);
     }
   }).observe(document, { subtree: true, childList: true });
 })();
