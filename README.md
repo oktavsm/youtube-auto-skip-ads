@@ -119,4 +119,4 @@ auto-skip-ads-ext/
 ## Lisensi
 
 Proyek ini dirilis secara terbuka di bawah lisensi [MIT](LICENSE).
-Hak Cipta (c) 2026 Oktaviansyah.
+Hak Cipta (c) 2026 oktaavsm.
