@@ -136,6 +136,10 @@
   }
 
   function checkAndSkip() {
+    if (document.documentElement.dataset.autoSkipEnabled === 'false') {
+      return;
+    }
+
     const player = document.querySelector('#movie_player, .html5-video-player');
     const isAd = player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'));
     if (!isAd && !document.querySelector('.ytp-ad-player-overlay')) {
@@ -145,6 +149,21 @@
     const btn = findSkipButton();
     if (btn) {
       executeSkip(btn);
+      return;
+    }
+
+    // Fast-forward unskippable ads directly in main world
+    if (document.documentElement.dataset.skipUnskippable !== 'false') {
+      const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+      if (video && isFinite(video.duration) && video.duration <= 20 && video.duration > 0) {
+        if (video.currentTime >= 0.1 && (video.duration - video.currentTime > 0.5)) {
+          console.log('[AutoSkipAds] Main World unskippable ad skip triggered.');
+          try {
+            video.currentTime = Math.max(0, video.duration - 0.1);
+            video.play().catch(() => {});
+          } catch (e) {}
+        }
+      }
     }
   }
 
@@ -162,7 +181,6 @@
 
   // Listen to triggers from content.js
   document.addEventListener('__AutoSkipAds_TriggerSkip', () => {
-    const btn = findSkipButton();
-    if (btn) executeSkip(btn);
+    checkAndSkip();
   });
 })();

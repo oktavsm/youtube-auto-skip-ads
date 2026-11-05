@@ -6,6 +6,7 @@
   const DEFAULT_SETTINGS = {
     enabled: true,
     autoCloseBanners: true,
+    skipUnskippable: true,
     speedUpAd: false,
     adSpeed: 4,
     autoMuteAd: false
@@ -24,10 +25,11 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
-  // Sync enabled state to documentElement for main world script
+  // Sync state to documentElement for main world script
   function syncStateToDOM() {
     if (document.documentElement) {
       document.documentElement.dataset.autoSkipEnabled = settings.enabled ? 'true' : 'false';
+      document.documentElement.dataset.skipUnskippable = settings.skipUnskippable ? 'true' : 'false';
     }
   }
 
@@ -79,6 +81,64 @@
       return true;
     }
     return false;
+  }
+
+  // Check if current ad is an unskippable ad (e.g. 5s or 15s bumper/non-skippable ad)
+  function isUnskippableAd() {
+    const skipBtn = document.querySelector(
+      'button.ytp-skip-ad-button, ' +
+      'button.ytp-skip-ad-button-fix-fullscreen-grid, ' +
+      'button.ytp-ad-skip-button-modern, ' +
+      'button.ytp-ad-skip-button, ' +
+      'button[id^="skip-button:"], ' +
+      '.ytp-skip-ad-button, ' +
+      '.ytp-ad-skip-button-modern, ' +
+      '.ytp-ad-skip-button'
+    );
+    if (skipBtn) return false;
+
+    // Check textual markers used by YouTube for unskippable ads
+    const adTextEl = document.querySelector('.ytp-ad-preview-text, .ytp-ad-message-container, .ytp-ad-text');
+    if (adTextEl) {
+      const text = (adTextEl.textContent || '').toLowerCase();
+      if (
+        text.includes('after ad') ||
+        text.includes('after ads') ||
+        text.includes('setelah iklan') ||
+        text.includes('akan selesai') ||
+        text.includes('berakhir dalam') ||
+        text.includes('ends in') ||
+        text.includes('video will play')
+      ) {
+        return true;
+      }
+    }
+
+    // Short ads without a skip button are unskippable bumper/pre-roll ads (typically <= 20 seconds)
+    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+    if (video && isFinite(video.duration) && video.duration <= 20) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // Fast-forward unskippable ad directly to completion in 0.1s
+  function handleUnskippableAd(video) {
+    if (!video || !settings.skipUnskippable) return;
+
+    if (!isFinite(video.duration) || video.duration <= 0 || isNaN(video.duration)) {
+      return;
+    }
+
+    // Wait until video has begun playback (> 0.1s) and not already near end
+    if (video.currentTime >= 0.1 && (video.duration - video.currentTime > 0.5)) {
+      console.log('[AutoSkipAds] Unskippable ad detected: fast-forwarding to completion.');
+      try {
+        video.currentTime = Math.max(0, video.duration - 0.1);
+        video.play().catch(() => {});
+      } catch (e) {}
+    }
   }
 
   // Generate unique signature for current ad to track counter accurately
@@ -183,7 +243,13 @@
           console.log('[AutoSkipAds] Ad detected with signature:', signature);
         }
 
-        // Signal main world engine to check and trigger proxy skip
+        // 1. If ad is unskippable (no skip button, short duration), fast-forward immediately
+        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+        if (isUnskippableAd()) {
+          handleUnskippableAd(video);
+        }
+
+        // 2. Signal main world engine to check and trigger proxy skip for skippable ads
         document.dispatchEvent(new CustomEvent('__AutoSkipAds_TriggerSkip'));
 
         if (settings.autoCloseBanners) {

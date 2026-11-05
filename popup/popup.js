@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // DOM Elements
   const toggleEnabled = document.getElementById('toggleEnabled');
+  const toggleUnskippable = document.getElementById('toggleUnskippable');
   const toggleBanners = document.getElementById('toggleBanners');
   const toggleSpeed = document.getElementById('toggleSpeed');
   const speedSliderGroup = document.getElementById('speedSliderGroup');
@@ -17,7 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const DEFAULTS = {
     enabled: true,
     autoCloseBanners: true,
-    speedUpAd: true,
+    skipUnskippable: true,
+    speedUpAd: false,
     adSpeed: 4,
     autoMuteAd: false,
     skipCount: 0
@@ -52,19 +54,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     chrome.storage.local.get(DEFAULTS, (data) => {
-      toggleEnabled.checked = data.enabled;
-      toggleBanners.checked = data.autoCloseBanners;
-      toggleSpeed.checked = data.speedUpAd;
-      toggleMute.checked = data.autoMuteAd;
+      toggleEnabled.checked = data.enabled !== false;
+      if (toggleUnskippable) {
+        toggleUnskippable.checked = data.skipUnskippable !== false;
+      }
+      toggleBanners.checked = data.autoCloseBanners !== false;
+      toggleSpeed.checked = data.speedUpAd === true;
+      toggleMute.checked = data.autoMuteAd === true;
 
       const currentSpeed = data.adSpeed || 4;
       speedSlider.value = currentSpeed;
       speedSlider.setAttribute('aria-valuenow', currentSpeed);
       speedValueBadge.textContent = currentSpeed + 'x';
 
-      updateSpeedSliderState(data.speedUpAd);
+      updateSpeedSliderState(data.speedUpAd === true);
       skipCountDisplay.textContent = Number(data.skipCount || 0).toLocaleString('id-ID');
-      updateStatusBadge(data.enabled);
+      updateStatusBadge(data.enabled !== false);
     });
   }
 
@@ -76,6 +81,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateStatusBadge(isEnabled);
       });
     });
+
+    if (toggleUnskippable) {
+      toggleUnskippable.addEventListener('change', () => {
+        chrome.storage.local.set({ skipUnskippable: toggleUnskippable.checked });
+      });
+    }
 
     toggleBanners.addEventListener('change', () => {
       chrome.storage.local.set({ autoCloseBanners: toggleBanners.checked });

@@ -1,8 +1,8 @@
 # Auto Skip YouTube Ads
 
-Ekstensi browser berbasis **Manifest V3** untuk Microsoft Edge dan Google Chrome yang secara otomatis menekan tombol "Lewati Iklan" (*Skip Ad*) saat tombol tersebut muncul di YouTube, tanpa memblokir permintaan jaringan iklan (*network request*).
+Ekstensi browser berbasis **Manifest V3** untuk Microsoft Edge dan Google Chrome yang secara otomatis melewati iklan di YouTube (baik iklan skippable maupun iklan non-skippable 5s / 15s), tanpa memblokir permintaan jaringan iklan (*network request*).
 
-Dengan metode interaksi DOM berbasis **Trusted ProxyEvent**, YouTube tidak akan mendeteksi penggunaan ad-blocker karena video iklan tetap diizinkan dimuat secara normal, sementara sistem secara otomatis mengeksekusi aksi lewati iklan seketika tombol tersedia.
+Dengan kombinasi **Trusted ProxyEvent** dan **Direct Seek Completion**, YouTube tidak akan mendeteksi penggunaan ad-blocker karena video iklan tetap diizinkan dimuat secara normal, sementara sistem otomatisasi menyelesaikan iklan seketika.
 
 ---
 
@@ -22,6 +22,7 @@ Dengan metode interaksi DOM berbasis **Trusted ProxyEvent**, YouTube tidak akan 
 ## Fitur Utama
 
 - **Otomatis Klik Tombol Skip Murni**: Mengeksekusi aksi lewati iklan seketika tombol "Lewati Iklan" (*Skip Ad*) aktif di detik ke-5 atau setelah hitungan mundur selesai.
+- **Lewati Iklan Non-Skip (5s / 15s)**: Mendeteksi iklan yang tidak memiliki tombol lewati (seperti bumper ad 5-6 detik atau iklan non-skippable 15 detik), dan langsung melompatkan durasi ke detik akhir (`duration - 0.1`) sehingga iklan selesai instan dalam 0.1 detik.
 - **Dukungan Multi-Iklan**: Menangani rangkaian iklan beruntun (*Ad 1 of 2* dan *Ad 2 of 2*) secara otomatis tanpa henti.
 - **Bypass Proteksi isTrusted YouTube**: Memanfaatkan injeksi konteks `world: "MAIN"` dan `ProxyEvent` untuk memicu handler klik internal player YouTube (`Nqb.onClick`) secara sah tanpa diblokir oleh anti-bot.
 - **Tutup Banner Overlay**: Otomatis menutup banner iklan pop-up yang menutupi area bawah video.
@@ -44,11 +45,12 @@ Ekstensi ini dirancang menggunakan arsitektur modular dua lapis (*Dual-World Arc
   |     - Menangkap listener klik asli via EventTarget.prototype.addEventListener
   |     - Membungkus MouseEvent dengan ProxyEvent (isTrusted: true, composedPath)
   |     - Mengeksekusi Nqb.onClick langsung pada tombol .ytp-skip-ad-button
+  |     - Melompatkan durasi iklan non-skippable secara native
   |
   +-- Content Script (Isolated World)
-  |     - Mengelola pengaturan pengguna (speed, mute, toggle banner)
+  |     - Mengelola preferensi pengguna (toggle unskippable, speed, mute, banner)
   |     - Menyimpan data statistik ke chrome.storage.local
-  |     - Mengawasi DOM dan mengendalikan pemutar audio/video
+  |     - Mengawasi DOM dan mendeteksi kondisi iklan aktif
   |
   +-- Extension Popup (Action UI)
         - Antarmuka tema gelap (Dark Theme)
