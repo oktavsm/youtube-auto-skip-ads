@@ -1,8 +1,8 @@
 # Auto Skip YouTube Ads
 
-Ekstensi browser berbasis **Manifest V3** untuk Microsoft Edge dan Google Chrome yang secara otomatis melewati iklan di YouTube (baik iklan skippable maupun iklan non-skippable 5s / 15s), tanpa memblokir permintaan jaringan iklan (*network request*).
+Ekstensi browser berbasis **Manifest V3** untuk Microsoft Edge dan Google Chrome yang secara otomatis melewati iklan di YouTube (baik iklan skippable maupun iklan non-skippable 5s / 15s) serta mencegah jeda otomatis saat layar ditinggal (*anti-idle pause* "Video paused. Continue watching?"), tanpa memblokir permintaan jaringan iklan (*network request*).
 
-Dengan kombinasi **Trusted ProxyEvent** dan **Direct Seek Completion**, YouTube tidak akan mendeteksi penggunaan ad-blocker karena video iklan tetap diizinkan dimuat secara normal, sementara sistem otomatisasi menyelesaikan iklan seketika.
+Dengan kombinasi **Trusted ProxyEvent**, **Direct Seek Completion**, dan **Proactive Activity Keep-Alive**, YouTube tidak akan mendeteksi penggunaan ad-blocker karena video iklan tetap diizinkan dimuat secara normal, sementara pemutaran video terus berlanjut tanpa gangguan.
 
 ---
 
@@ -23,6 +23,7 @@ Dengan kombinasi **Trusted ProxyEvent** dan **Direct Seek Completion**, YouTube 
 
 - **Otomatis Klik Tombol Skip Murni**: Mengeksekusi aksi lewati iklan seketika tombol "Lewati Iklan" (*Skip Ad*) aktif di detik ke-5 atau setelah hitungan mundur selesai.
 - **Lewati Iklan Non-Skip (5s / 15s)**: Mendeteksi iklan yang tidak memiliki tombol lewati (seperti bumper ad 5-6 detik atau iklan non-skippable 15 detik), dan langsung melompatkan durasi ke detik akhir (`duration - 0.1`) sehingga iklan selesai instan dalam 0.1 detik.
+- **Cegah Jeda Otomatis (Anti-Idle Pause)**: Mencegah dan secara otomatis melanjutkan pemutaran saat dialog *"Video paused. Continue watching?"* / *"Video dijeda. Lanjutkan menonton?"* muncul, sehingga video atau musik dapat diputar terus-menerus tanpa henti.
 - **Dukungan Multi-Iklan**: Menangani rangkaian iklan beruntun (*Ad 1 of 2* dan *Ad 2 of 2*) secara otomatis tanpa henti.
 - **Bypass Proteksi isTrusted YouTube**: Memanfaatkan injeksi konteks `world: "MAIN"` dan `ProxyEvent` untuk memicu handler klik internal player YouTube (`Nqb.onClick`) secara sah tanpa diblokir oleh anti-bot.
 - **Tutup Banner Overlay**: Otomatis menutup banner iklan pop-up yang menutupi area bawah video.
@@ -46,11 +47,13 @@ Ekstensi ini dirancang menggunakan arsitektur modular dua lapis (*Dual-World Arc
   |     - Membungkus MouseEvent dengan ProxyEvent (isTrusted: true, composedPath)
   |     - Mengeksekusi Nqb.onClick langsung pada tombol .ytp-skip-ad-button
   |     - Melompatkan durasi iklan non-skippable secara native
+  |     - Memperbarui window._lact berkala untuk mencegah pemicu dialog idle
+  |     - Mengonfirmasi dialog "Continue watching" dan melanjutkan pemutaran seketika
   |
   +-- Content Script (Isolated World)
-  |     - Mengelola preferensi pengguna (toggle unskippable, speed, mute, banner)
+  |     - Mengelola preferensi pengguna (toggle unskippable, anti-idle, speed, mute, banner)
   |     - Menyimpan data statistik ke chrome.storage.local
-  |     - Mengawasi DOM dan mendeteksi kondisi iklan aktif
+  |     - Mengawasi DOM dan mendeteksi kondisi iklan serta dialog idle
   |
   +-- Extension Popup (Action UI)
         - Antarmuka tema gelap (Dark Theme)

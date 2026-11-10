@@ -79,6 +79,100 @@
     return invoked;
   }
 
+  const IDLE_DIALOG_SELECTORS = [
+    'yt-confirm-dialog-renderer',
+    'ytd-popup-container yt-confirm-dialog-renderer',
+    'tp-yt-paper-dialog yt-confirm-dialog-renderer',
+    'tp-yt-paper-dialog',
+    'ytmusic-you-there-renderer'
+  ];
+
+  function isIdlePauseDialog(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+
+    if (el.tagName.toLowerCase().includes('you-there') || el.querySelector('ytmusic-you-there-renderer')) {
+      return true;
+    }
+
+    const text = (el.textContent || '').toLowerCase();
+    const idlePhrases = [
+      'video paused',
+      'continue watching',
+      'still watching',
+      'video dijeda',
+      'lanjutkan menonton',
+      'masih menonton',
+      'video en pausa',
+      'seguir viéndolo',
+      'sigues ahí',
+      'vidéo suspendue',
+      'poursuivre la lecture',
+      'video pausiert',
+      'weiter ansehen',
+      '動画が一時停止しました',
+      '続きを視聴しますか',
+      '동영상이 일시중지되었습니다',
+      '이어서 시청하시겠습니까'
+    ];
+
+    return idlePhrases.some(phrase => text.includes(phrase));
+  }
+
+  function checkAndHandleIdlePause() {
+    if (document.documentElement.dataset.preventIdlePause === 'false') {
+      return;
+    }
+
+    for (const sel of IDLE_DIALOG_SELECTORS) {
+      const dialogs = document.querySelectorAll(sel);
+      for (const dialog of dialogs) {
+        if (isIdlePauseDialog(dialog)) {
+          console.log('[AutoSkipAds] Main World idle pause dialog detected: auto-confirming.');
+          const confirmBtn = dialog.querySelector(
+            '#confirm-button button, ' +
+            '#confirm-button yt-button-shape button, ' +
+            '#confirm-button, ' +
+            'ytd-button-renderer#confirm-button button, ' +
+            'button[aria-label*="Yes"], ' +
+            'button[aria-label*="Ya"], ' +
+            'button[aria-label*="Continue"]'
+          );
+
+          if (confirmBtn) {
+            confirmBtn.click();
+          }
+
+          const backdrop = document.querySelector('tp-yt-iron-overlay-backdrop');
+          if (backdrop) {
+            try { backdrop.click(); } catch (e) {}
+          }
+
+          const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+          if (video && video.paused && !video.ended) {
+            video.play().catch(() => {});
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  // Refresh window._lact periodically to prevent YouTube idle timeout from ever firing
+  function keepAliveLact() {
+    if (document.documentElement.dataset.preventIdlePause === 'false') {
+      return;
+    }
+    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+    if (video && !video.paused && !video.ended) {
+      try {
+        window._lact = Date.now();
+      } catch (e) {}
+    }
+  }
+  setInterval(keepAliveLact, 10000);
+
   function executeSkip(btn) {
     if (!btn) return false;
 
@@ -168,10 +262,16 @@
   }
 
   // Fast interval check (100ms)
-  setInterval(checkAndSkip, 100);
+  setInterval(() => {
+    checkAndSkip();
+    checkAndHandleIdlePause();
+  }, 100);
 
   // MutationObserver for instant reaction
-  const observer = new MutationObserver(checkAndSkip);
+  const observer = new MutationObserver(() => {
+    checkAndSkip();
+    checkAndHandleIdlePause();
+  });
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
@@ -182,5 +282,6 @@
   // Listen to triggers from content.js
   document.addEventListener('__AutoSkipAds_TriggerSkip', () => {
     checkAndSkip();
+    checkAndHandleIdlePause();
   });
 })();

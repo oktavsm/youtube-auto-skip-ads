@@ -7,6 +7,7 @@
     enabled: true,
     autoCloseBanners: true,
     skipUnskippable: true,
+    preventIdlePause: true,
     speedUpAd: false,
     adSpeed: 4,
     autoMuteAd: false
@@ -25,11 +26,21 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
+  // Inactivity / Idle confirmation dialog selectors
+  const IDLE_DIALOG_SELECTORS = [
+    'yt-confirm-dialog-renderer',
+    'ytd-popup-container yt-confirm-dialog-renderer',
+    'tp-yt-paper-dialog yt-confirm-dialog-renderer',
+    'tp-yt-paper-dialog',
+    'ytmusic-you-there-renderer'
+  ];
+
   // Sync state to documentElement for main world script
   function syncStateToDOM() {
     if (document.documentElement) {
       document.documentElement.dataset.autoSkipEnabled = settings.enabled ? 'true' : 'false';
       document.documentElement.dataset.skipUnskippable = settings.skipUnskippable ? 'true' : 'false';
+      document.documentElement.dataset.preventIdlePause = settings.preventIdlePause ? 'true' : 'false';
     }
   }
 
@@ -138,6 +149,76 @@
         video.currentTime = Math.max(0, video.duration - 0.1);
         video.play().catch(() => {});
       } catch (e) {}
+    }
+  }
+
+  // Verify if a dialog is the YouTube idle "Video paused. Continue watching?" prompt
+  function isIdlePauseDialog(el) {
+    if (!el || !isVisible(el)) return false;
+
+    if (el.tagName.toLowerCase().includes('you-there') || el.querySelector('ytmusic-you-there-renderer')) {
+      return true;
+    }
+
+    const text = (el.textContent || '').toLowerCase();
+    const idlePhrases = [
+      'video paused',
+      'continue watching',
+      'still watching',
+      'video dijeda',
+      'lanjutkan menonton',
+      'masih menonton',
+      'video en pausa',
+      'seguir viéndolo',
+      'sigues ahí',
+      'vidéo suspendue',
+      'poursuivre la lecture',
+      'video pausiert',
+      'weiter ansehen',
+      '動画が一時停止しました',
+      '続きを視聴しますか',
+      '동영상이 일시중지되었습니다',
+      '이어서 시청하시겠습니까'
+    ];
+
+    return idlePhrases.some(phrase => text.includes(phrase));
+  }
+
+  // Dismiss idle pause dialog and resume playback automatically
+  function handleIdlePause() {
+    if (!settings.preventIdlePause) return;
+
+    for (const sel of IDLE_DIALOG_SELECTORS) {
+      const dialogs = document.querySelectorAll(sel);
+      for (const dialog of dialogs) {
+        if (isIdlePauseDialog(dialog)) {
+          console.log('[AutoSkipAds] Inactivity pause dialog detected: auto-confirming.');
+          const confirmBtn = dialog.querySelector(
+            '#confirm-button button, ' +
+            '#confirm-button yt-button-shape button, ' +
+            '#confirm-button, ' +
+            'ytd-button-renderer#confirm-button button, ' +
+            'button[aria-label*="Yes"], ' +
+            'button[aria-label*="Ya"], ' +
+            'button[aria-label*="Continue"]'
+          );
+
+          if (confirmBtn) {
+            confirmBtn.click();
+          }
+
+          const backdrop = document.querySelector('tp-yt-iron-overlay-backdrop');
+          if (backdrop && isVisible(backdrop)) {
+            backdrop.click();
+          }
+
+          const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+          if (video && video.paused && !video.ended) {
+            video.play().catch(() => {});
+          }
+          return;
+        }
+      }
     }
   }
 
@@ -277,6 +358,7 @@
       throttleTimeout = setTimeout(() => {
         throttleTimeout = null;
         handleAds();
+        handleIdlePause();
       }, 100);
     });
 
@@ -287,10 +369,19 @@
       attributeFilter: ['class', 'style', 'id']
     });
 
-    setInterval(handleAds, 200);
+    setInterval(() => {
+      handleAds();
+      handleIdlePause();
+    }, 200);
 
-    window.addEventListener('yt-navigate-finish', handleAds);
-    window.addEventListener('yt-page-data-updated', handleAds);
+    window.addEventListener('yt-navigate-finish', () => {
+      handleAds();
+      handleIdlePause();
+    });
+    window.addEventListener('yt-page-data-updated', () => {
+      handleAds();
+      handleIdlePause();
+    });
   }
 
   if (document.readyState === 'loading') {
@@ -303,7 +394,10 @@
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
       currentUrl = location.href;
-      setTimeout(handleAds, 200);
+      setTimeout(() => {
+        handleAds();
+        handleIdlePause();
+      }, 200);
     }
   }).observe(document, { subtree: true, childList: true });
 })();

@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
   const toggleEnabled = document.getElementById('toggleEnabled');
   const toggleUnskippable = document.getElementById('toggleUnskippable');
+  const togglePreventIdle = document.getElementById('togglePreventIdle');
   const toggleBanners = document.getElementById('toggleBanners');
   const toggleSpeed = document.getElementById('toggleSpeed');
   const speedSliderGroup = document.getElementById('speedSliderGroup');
@@ -19,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     enabled: true,
     autoCloseBanners: true,
     skipUnskippable: true,
+    preventIdlePause: true,
     speedUpAd: false,
     adSpeed: 4,
     autoMuteAd: false,
@@ -58,6 +60,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (toggleUnskippable) {
         toggleUnskippable.checked = data.skipUnskippable !== false;
       }
+      if (togglePreventIdle) {
+        togglePreventIdle.checked = data.preventIdlePause !== false;
+      }
       toggleBanners.checked = data.autoCloseBanners !== false;
       toggleSpeed.checked = data.speedUpAd === true;
       toggleMute.checked = data.autoMuteAd === true;
@@ -85,6 +90,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (toggleUnskippable) {
       toggleUnskippable.addEventListener('change', () => {
         chrome.storage.local.set({ skipUnskippable: toggleUnskippable.checked });
+      });
+    }
+
+    if (togglePreventIdle) {
+      togglePreventIdle.addEventListener('change', () => {
+        chrome.storage.local.set({ preventIdlePause: togglePreventIdle.checked });
       });
     }
 
