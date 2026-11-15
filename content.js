@@ -1,7 +1,14 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] High-Precision Controller loaded.');
+  const DEBUG = false;
+  const CONFIG_REQ_CHANNEL = '__yt_cfg_req_7f3a';
+  const TRIGGER_CHANNEL = '__yt_act_skip_7f3a';
+  const SKIPPED_CHANNEL = '__yt_act_done_7f3a';
+
+  function log(...args) {
+    if (DEBUG) console.log('[AutoSkipAds]', ...args);
+  }
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -18,7 +25,9 @@
   let currentAdIdentifier = '';
   let isRunning = false;
 
-  // Banner close selectors
+  const rateAdjustedVideos = new WeakSet();
+  const mutedVideos = new WeakSet();
+
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container button',
@@ -26,7 +35,6 @@
     'button.ytp-ad-feedback-dialog-close-button'
   ];
 
-  // Inactivity / Idle confirmation dialog selectors
   const IDLE_DIALOG_SELECTORS = [
     'yt-confirm-dialog-renderer',
     'ytd-popup-container yt-confirm-dialog-renderer',
@@ -35,28 +43,32 @@
     'ytmusic-you-there-renderer'
   ];
 
-  // Sync state to documentElement for main world script
-  function syncStateToDOM() {
-    if (document.documentElement) {
-      document.documentElement.dataset.autoSkipEnabled = settings.enabled ? 'true' : 'false';
-      document.documentElement.dataset.skipUnskippable = settings.skipUnskippable ? 'true' : 'false';
-      document.documentElement.dataset.preventIdlePause = settings.preventIdlePause ? 'true' : 'false';
-    }
+  // Sync settings to main world engine via postMessage (no <html> dataset footprint)
+  function syncSettingsToMainWorld() {
+    const targetOrigin = (window.location && window.location.origin && window.location.origin !== 'null')
+      ? window.location.origin
+      : '*';
+    window.postMessage({
+      __ytSync7f3a: 1,
+      enabled: settings.enabled,
+      skipUnskippable: settings.skipUnskippable,
+      preventIdlePause: settings.preventIdlePause
+    }, targetOrigin);
   }
 
-  // Load settings from storage
+  window.addEventListener(CONFIG_REQ_CHANNEL, syncSettingsToMainWorld);
+
   function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get(DEFAULT_SETTINGS, (stored) => {
         if (stored) {
           settings = { ...DEFAULT_SETTINGS, ...stored };
-          syncStateToDOM();
+          syncSettingsToMainWorld();
         }
       });
     }
   }
 
-  // Real-time settings listener
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'local') {
@@ -65,21 +77,19 @@
             settings[key] = change.newValue;
           }
         }
-        syncStateToDOM();
+        syncSettingsToMainWorld();
       }
     });
   }
 
-  // Visibility check
   function isVisible(el) {
-    if (!el) return false;
+    if (!el || !el.isConnected) return false;
     const style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden') return false;
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   }
 
-  // Check if player is currently in an advertisement state
   function isAdShowing() {
     const player = document.querySelector('#movie_player, .html5-video-player');
     if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
@@ -94,67 +104,8 @@
     return false;
   }
 
-  // Check if current ad is an unskippable ad (e.g. 5s or 15s bumper/non-skippable ad)
-  function isUnskippableAd() {
-    const skipBtn = document.querySelector(
-      'button.ytp-skip-ad-button, ' +
-      'button.ytp-skip-ad-button-fix-fullscreen-grid, ' +
-      'button.ytp-ad-skip-button-modern, ' +
-      'button.ytp-ad-skip-button, ' +
-      'button[id^="skip-button:"], ' +
-      '.ytp-skip-ad-button, ' +
-      '.ytp-ad-skip-button-modern, ' +
-      '.ytp-ad-skip-button'
-    );
-    if (skipBtn) return false;
-
-    // Check textual markers used by YouTube for unskippable ads
-    const adTextEl = document.querySelector('.ytp-ad-preview-text, .ytp-ad-message-container, .ytp-ad-text');
-    if (adTextEl) {
-      const text = (adTextEl.textContent || '').toLowerCase();
-      if (
-        text.includes('after ad') ||
-        text.includes('after ads') ||
-        text.includes('setelah iklan') ||
-        text.includes('akan selesai') ||
-        text.includes('berakhir dalam') ||
-        text.includes('ends in') ||
-        text.includes('video will play')
-      ) {
-        return true;
-      }
-    }
-
-    // Short ads without a skip button are unskippable bumper/pre-roll ads (typically <= 20 seconds)
-    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-    if (video && isFinite(video.duration) && video.duration <= 20) {
-      return true;
-    }
-
-    return false;
-  }
-
-  // Fast-forward unskippable ad directly to completion in 0.1s
-  function handleUnskippableAd(video) {
-    if (!video || !settings.skipUnskippable) return;
-
-    if (!isFinite(video.duration) || video.duration <= 0 || isNaN(video.duration)) {
-      return;
-    }
-
-    // Wait until video has begun playback (> 0.1s) and not already near end
-    if (video.currentTime >= 0.1 && (video.duration - video.currentTime > 0.5)) {
-      console.log('[AutoSkipAds] Unskippable ad detected: fast-forwarding to completion.');
-      try {
-        video.currentTime = Math.max(0, video.duration - 0.1);
-        video.play().catch(() => {});
-      } catch (e) {}
-    }
-  }
-
-  // Verify if a dialog is the YouTube idle "Video paused. Continue watching?" prompt
   function isIdlePauseDialog(el) {
-    if (!el || !isVisible(el)) return false;
+    if (!isVisible(el)) return false;
 
     if (el.tagName.toLowerCase().includes('you-there') || el.querySelector('ytmusic-you-there-renderer')) {
       return true;
@@ -184,7 +135,6 @@
     return idlePhrases.some(phrase => text.includes(phrase));
   }
 
-  // Dismiss idle pause dialog and resume playback automatically
   function handleIdlePause() {
     if (!settings.preventIdlePause) return;
 
@@ -192,7 +142,7 @@
       const dialogs = document.querySelectorAll(sel);
       for (const dialog of dialogs) {
         if (isIdlePauseDialog(dialog)) {
-          console.log('[AutoSkipAds] Inactivity pause dialog detected: auto-confirming.');
+          log('Inactivity pause dialog detected: auto-confirming.');
           const confirmBtn = dialog.querySelector(
             '#confirm-button button, ' +
             '#confirm-button yt-button-shape button, ' +
@@ -222,7 +172,6 @@
     }
   }
 
-  // Generate unique signature for current ad to track counter accurately
   function getAdSignature() {
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
     const badge = document.querySelector('.ytp-ad-text, .ytp-ad-simple-ad-badge');
@@ -235,7 +184,6 @@
     return `${badgeText}|${skipId}|${videoSrc}`;
   }
 
-  // Increment skip counter in storage (strictly once per ad)
   function incrementSkipCounter() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       chrome.storage.local.get({ skipCount: 0 }, (data) => {
@@ -245,7 +193,6 @@
     }
   }
 
-  // Close overlay banners
   function closeBanners() {
     for (const sel of BANNER_SELECTORS) {
       const closeBtn = document.querySelector(sel);
@@ -256,7 +203,6 @@
     }
   }
 
-  // Manage playback speed and audio safely
   function handlePlaybackRate(adActive) {
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
     if (!video) return;
@@ -268,38 +214,35 @@
         const effectiveSpeed = nearEnd ? 1.0 : targetSpeed;
 
         if (video.playbackRate !== effectiveSpeed) {
-          if (!video.__adRateApplied) {
+          if (!rateAdjustedVideos.has(video)) {
             originalPlaybackRate = (video.playbackRate && video.playbackRate <= 2) ? video.playbackRate : 1;
           }
           video.playbackRate = effectiveSpeed;
-          video.__adRateApplied = true;
+          rateAdjustedVideos.add(video);
         }
       }
 
-      // Auto-resume if ad is stuck or paused near the end
       if (video.paused && !video.ended && video.duration && (video.duration - video.currentTime <= 1.0)) {
         video.play().catch(() => {});
       }
 
       if (settings.autoMuteAd && !video.muted) {
         video.muted = true;
-        video.__adSkipperMuted = true;
+        mutedVideos.add(video);
       }
     } else {
-      // Normal video playback: restore user speed and audio
-      if (video.__adRateApplied) {
+      if (rateAdjustedVideos.has(video)) {
         video.playbackRate = originalPlaybackRate || 1;
-        video.__adRateApplied = false;
+        rateAdjustedVideos.delete(video);
       }
-      if (video.__adSkipperMuted) {
+      if (mutedVideos.has(video)) {
         video.muted = false;
-        video.__adSkipperMuted = false;
+        mutedVideos.delete(video);
       }
     }
   }
 
-  // Listen to skip events from main world script
-  document.addEventListener('__AutoSkipAds_AdSkipped', () => {
+  window.addEventListener(SKIPPED_CHANNEL, () => {
     const sig = getAdSignature();
     if (sig !== currentAdIdentifier) {
       currentAdIdentifier = sig;
@@ -307,7 +250,6 @@
     }
   });
 
-  // Main scan tick
   function handleAds() {
     if (isRunning || !settings.enabled) return;
     isRunning = true;
@@ -321,36 +263,27 @@
         if (signature !== currentAdIdentifier) {
           currentAdIdentifier = signature;
           incrementSkipCounter();
-          console.log('[AutoSkipAds] Ad detected with signature:', signature);
+          log('Ad detected with signature:', signature);
         }
 
-        // 1. If ad is unskippable (no skip button, short duration), fast-forward immediately
-        const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-        if (isUnskippableAd()) {
-          handleUnskippableAd(video);
-        }
-
-        // 2. Signal main world engine to check and trigger proxy skip for skippable ads
-        document.dispatchEvent(new CustomEvent('__AutoSkipAds_TriggerSkip'));
+        // Delegate skip & unskippable completion to main world engine
+        window.dispatchEvent(new Event(TRIGGER_CHANNEL));
 
         if (settings.autoCloseBanners) {
           closeBanners();
         }
-      } else {
-        if (currentAdIdentifier !== '') {
-          currentAdIdentifier = '';
-          console.log('[AutoSkipAds] All ads ended.');
-        }
+      } else if (currentAdIdentifier !== '') {
+        currentAdIdentifier = '';
+        log('All ads ended.');
       }
     } finally {
       isRunning = false;
     }
   }
 
-  // Initialize
   function init() {
     loadSettings();
-    syncStateToDOM();
+    syncSettingsToMainWorld();
 
     let throttleTimeout = null;
     const observer = new MutationObserver(() => {
@@ -366,7 +299,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'style', 'id']
+      attributeFilter: ['class', 'style']
     });
 
     setInterval(() => {

@@ -1,23 +1,74 @@
 (() => {
   'use strict';
 
-  console.log('[AutoSkipAds] Main World Core Engine active.');
+  const DEBUG = false;
+  const CONFIG_REQ_CHANNEL = '__yt_cfg_req_7f3a';
+  const TRIGGER_CHANNEL = '__yt_act_skip_7f3a';
+  const SKIPPED_CHANNEL = '__yt_act_done_7f3a';
 
-  // Hook EventTarget.prototype.addEventListener to capture YouTube click handlers
-  const originalAEL = EventTarget.prototype.addEventListener;
-  EventTarget.prototype.addEventListener = function(type, listener, options) {
-    if ((type === 'click' || type === 'pointerup') && listener) {
-      try {
-        if (!this.__ytClickListeners) {
-          this.__ytClickListeners = [];
-        }
-        if (!this.__ytClickListeners.includes(listener)) {
-          this.__ytClickListeners.push(listener);
-        }
-      } catch (e) {}
-    }
-    return originalAEL.call(this, type, listener, options);
+  function log(...args) {
+    if (DEBUG) console.log('[AutoSkipAds]', ...args);
+  }
+
+  let config = {
+    enabled: true,
+    skipUnskippable: true,
+    preventIdlePause: true
   };
+
+  window.addEventListener('message', (e) => {
+    if (e.source !== window || !e.data || e.data.__ytSync7f3a !== 1) return;
+    config = {
+      enabled: e.data.enabled !== false,
+      skipUnskippable: e.data.skipUnskippable !== false,
+      preventIdlePause: e.data.preventIdlePause !== false
+    };
+  });
+
+  // Request initial state from isolated content script without touching <html> attributes
+  window.dispatchEvent(new Event(CONFIG_REQ_CHANNEL));
+
+  // Stealth listener capture using WeakMap + native-preserving Proxy
+  const listenerMap = new WeakMap();
+  const originalAEL = EventTarget.prototype.addEventListener;
+  const originalREL = EventTarget.prototype.removeEventListener;
+
+  EventTarget.prototype.addEventListener = new Proxy(originalAEL, {
+    apply(target, thisArg, args) {
+      const type = args[0];
+      const listener = args[1];
+      if ((type === 'click' || type === 'pointerup') && listener && thisArg instanceof Element) {
+        try {
+          let list = listenerMap.get(thisArg);
+          if (!list) {
+            list = [];
+            listenerMap.set(thisArg, list);
+          }
+          if (!list.includes(listener)) {
+            list.push(listener);
+          }
+        } catch (e) {}
+      }
+      return Reflect.apply(target, thisArg, args);
+    }
+  });
+
+  EventTarget.prototype.removeEventListener = new Proxy(originalREL, {
+    apply(target, thisArg, args) {
+      const type = args[0];
+      const listener = args[1];
+      if ((type === 'click' || type === 'pointerup') && listener && thisArg instanceof Element) {
+        try {
+          const list = listenerMap.get(thisArg);
+          if (list) {
+            const idx = list.indexOf(listener);
+            if (idx !== -1) list.splice(idx, 1);
+          }
+        } catch (e) {}
+      }
+      return Reflect.apply(target, thisArg, args);
+    }
+  });
 
   const SKIP_SELECTORS = [
     'button.ytp-skip-ad-button',
@@ -37,12 +88,35 @@
     '[id^="skip-button:"]'
   ];
 
+  const IDLE_DIALOG_SELECTORS = [
+    'yt-confirm-dialog-renderer',
+    'ytd-popup-container yt-confirm-dialog-renderer',
+    'tp-yt-paper-dialog yt-confirm-dialog-renderer',
+    'tp-yt-paper-dialog',
+    'ytmusic-you-there-renderer'
+  ];
+
+  let lastSkipAttemptTime = 0;
+  let lastFastForwardedKey = '';
+
   function createTrustedProxyEvent(targetEl) {
+    const rect = targetEl.getBoundingClientRect();
+    const jitterX = (Math.random() - 0.5) * Math.min(8, rect.width * 0.2);
+    const jitterY = (Math.random() - 0.5) * Math.min(8, rect.height * 0.2);
+    const clientX = Math.round(rect.left + rect.width / 2 + jitterX);
+    const clientY = Math.round(rect.top + rect.height / 2 + jitterY);
+
     const realEvent = new MouseEvent('click', {
       bubbles: true,
       cancelable: true,
       composed: true,
-      view: window
+      view: window,
+      clientX,
+      clientY,
+      screenX: clientX + (window.screenX || 0),
+      screenY: clientY + (window.screenY || 0),
+      button: 0,
+      buttons: 1
     });
 
     return new Proxy(realEvent, {
@@ -61,9 +135,10 @@
   function invokeListenersOn(el, proxyEvent) {
     if (!el) return false;
     let invoked = false;
+    const list = listenerMap.get(el);
 
-    if (el.__ytClickListeners && el.__ytClickListeners.length > 0) {
-      for (const fn of el.__ytClickListeners) {
+    if (list && list.length > 0) {
+      for (const fn of [...list]) {
         try {
           if (typeof fn === 'function') {
             fn.call(el, proxyEvent);
@@ -79,18 +154,59 @@
     return invoked;
   }
 
-  const IDLE_DIALOG_SELECTORS = [
-    'yt-confirm-dialog-renderer',
-    'ytd-popup-container yt-confirm-dialog-renderer',
-    'tp-yt-paper-dialog yt-confirm-dialog-renderer',
-    'tp-yt-paper-dialog',
-    'ytmusic-you-there-renderer'
-  ];
-
-  function isIdlePauseDialog(el) {
-    if (!el) return false;
+  function isElementVisible(el) {
+    if (!el || !el.isConnected) return false;
     const style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function isSkipButtonReady(el) {
+    if (!isElementVisible(el)) return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+
+    const style = window.getComputedStyle(el);
+    if (style.pointerEvents === 'none') return false;
+
+    const opacity = parseFloat(style.opacity);
+    if (!isNaN(opacity) && opacity < 0.75) return false;
+
+    // Avoid firing during countdown labels (e.g., "5", "Skip in 4", "Lewati dalam 3")
+    const text = (el.textContent || '').trim();
+    if (/^\d+$/.test(text) || /\b(in|dalam)\s+\d+/i.test(text)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function hasPendingSkippableUI(root) {
+    const scope = root || document;
+    // Check if skip button exists (even if counting down) or preview countdown container is visible
+    for (const sel of SKIP_SELECTORS) {
+      if (scope.querySelector(sel)) return true;
+    }
+    const preview = scope.querySelector('.ytp-ad-preview-container, .ytp-ad-preview-slot');
+    if (preview && isElementVisible(preview)) {
+      const text = (preview.textContent || '').toLowerCase();
+      // If preview says "after ad" / "setelah iklan", it is unskippable; otherwise it is a skip countdown
+      const unskippableText = (
+        text.includes('after ad') ||
+        text.includes('after ads') ||
+        text.includes('setelah iklan') ||
+        text.includes('akan selesai') ||
+        text.includes('berakhir dalam') ||
+        text.includes('ends in') ||
+        text.includes('video will play')
+      );
+      if (!unskippableText) return true;
+    }
+    return false;
+  }
+
+  function isIdlePauseDialog(el) {
+    if (!isElementVisible(el)) return false;
 
     if (el.tagName.toLowerCase().includes('you-there') || el.querySelector('ytmusic-you-there-renderer')) {
       return true;
@@ -121,15 +237,13 @@
   }
 
   function checkAndHandleIdlePause() {
-    if (document.documentElement.dataset.preventIdlePause === 'false') {
-      return;
-    }
+    if (!config.preventIdlePause) return;
 
     for (const sel of IDLE_DIALOG_SELECTORS) {
       const dialogs = document.querySelectorAll(sel);
       for (const dialog of dialogs) {
         if (isIdlePauseDialog(dialog)) {
-          console.log('[AutoSkipAds] Main World idle pause dialog detected: auto-confirming.');
+          log('Inactivity pause dialog detected.');
           const confirmBtn = dialog.querySelector(
             '#confirm-button button, ' +
             '#confirm-button yt-button-shape button, ' +
@@ -145,7 +259,7 @@
           }
 
           const backdrop = document.querySelector('tp-yt-iron-overlay-backdrop');
-          if (backdrop) {
+          if (backdrop && isElementVisible(backdrop)) {
             try { backdrop.click(); } catch (e) {}
           }
 
@@ -161,9 +275,7 @@
 
   // Refresh window._lact periodically to prevent YouTube idle timeout from ever firing
   function keepAliveLact() {
-    if (document.documentElement.dataset.preventIdlePause === 'false') {
-      return;
-    }
+    if (!config.preventIdlePause) return;
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
     if (video && !video.paused && !video.ended) {
       try {
@@ -174,86 +286,87 @@
   setInterval(keepAliveLact, 10000);
 
   function executeSkip(btn) {
-    if (!btn) return false;
+    if (!btn || !config.enabled) return false;
 
-    if (document.documentElement.dataset.autoSkipEnabled === 'false') {
+    const now = Date.now();
+    if (now - lastSkipAttemptTime < 700) {
       return false;
     }
+    lastSkipAttemptTime = now;
 
-    console.log('[AutoSkipAds] Executing trusted Proxy skip on:', btn.className || btn.id);
+    log('Executing trusted skip on:', btn.className || btn.id);
     const proxyEvent = createTrustedProxyEvent(btn);
     let success = false;
 
-    // 1. Invoke captured listeners directly on the button
     if (invokeListenersOn(btn, proxyEvent)) {
       success = true;
     }
 
-    // 2. Invoke listeners on inner text div or children
     const innerText = btn.querySelector('.ytp-skip-ad-button__text, [class*="skip-button__text"], div, span');
     if (innerText && invokeListenersOn(innerText, proxyEvent)) {
       success = true;
     }
 
-    // 3. Invoke listeners on parent container
     if (btn.parentElement && invokeListenersOn(btn.parentElement, proxyEvent)) {
       success = true;
     }
 
-    // 4. Dispatch proxy event through standard DOM event pipeline
-    try {
-      btn.dispatchEvent(proxyEvent);
-    } catch (e) {}
+    if (!success) {
+      try {
+        btn.dispatchEvent(proxyEvent);
+      } catch (e) {}
+      try {
+        btn.click();
+      } catch (e) {}
+    }
 
-    // 5. Native click
-    try {
-      btn.click();
-    } catch (e) {}
-
-    // 6. Notify content script of successful skip
-    document.dispatchEvent(new CustomEvent('__AutoSkipAds_AdSkipped'));
-    return success;
+    window.dispatchEvent(new Event(SKIPPED_CHANNEL));
+    return true;
   }
 
-  function findSkipButton() {
+  function findReadySkipButton(root) {
+    const scope = root || document;
     for (const sel of SKIP_SELECTORS) {
-      const el = document.querySelector(sel);
-      if (el) {
-        if (el.tagName.toLowerCase() !== 'button') {
-          const innerBtn = el.querySelector('button');
-          if (innerBtn) return innerBtn;
-        }
-        return el;
+      const el = scope.querySelector(sel);
+      if (!el) continue;
+
+      const targetBtn = el.tagName.toLowerCase() !== 'button' ? (el.querySelector('button') || el) : el;
+      if (isSkipButtonReady(targetBtn)) {
+        return targetBtn;
       }
     }
     return null;
   }
 
   function checkAndSkip() {
-    if (document.documentElement.dataset.autoSkipEnabled === 'false') {
-      return;
-    }
+    if (!config.enabled) return;
 
     const player = document.querySelector('#movie_player, .html5-video-player');
     const isAd = player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'));
     if (!isAd && !document.querySelector('.ytp-ad-player-overlay')) {
+      lastFastForwardedKey = '';
       return;
     }
 
-    const btn = findSkipButton();
+    const scope = player || document.querySelector('.ytp-ad-player-overlay');
+    if (!scope) return;
+    const btn = findReadySkipButton(scope);
     if (btn) {
       executeSkip(btn);
       return;
     }
 
-    // Fast-forward unskippable ads directly in main world
-    if (document.documentElement.dataset.skipUnskippable !== 'false') {
-      const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
-      if (video && isFinite(video.duration) && video.duration <= 20 && video.duration > 0) {
-        if (video.currentTime >= 0.1 && (video.duration - video.currentTime > 0.5)) {
-          console.log('[AutoSkipAds] Main World unskippable ad skip triggered.');
+    // Handle genuinely unskippable ads safely (only when no skip button/countdown UI exists)
+    if (config.skipUnskippable && !hasPendingSkippableUI(scope)) {
+      const video = scope.querySelector('video.html5-main-video') || scope.querySelector('video');
+      if (video && isFinite(video.duration) && video.duration > 0 && video.duration <= 25) {
+        const adKey = `${(video.currentSrc || video.src || '').slice(-32)}|${video.duration.toFixed(1)}`;
+        // Wait at least 1.0s so ad-start telemetry registers cleanly and countdown UI has time to mount
+        if (lastFastForwardedKey !== adKey && video.currentTime >= 1.0 && (video.duration - video.currentTime > 0.6)) {
+          lastFastForwardedKey = adKey;
+          log('Unskippable ad fast-forward triggered:', adKey);
           try {
-            video.currentTime = Math.max(0, video.duration - 0.1);
+            video.currentTime = Math.max(0, video.duration - 0.15);
             video.play().catch(() => {});
           } catch (e) {}
         }
@@ -261,26 +374,33 @@
     }
   }
 
-  // Fast interval check (100ms)
+  let tickScheduled = false;
+  function scheduleTick() {
+    if (tickScheduled) return;
+    tickScheduled = true;
+    setTimeout(() => {
+      tickScheduled = false;
+      checkAndSkip();
+      checkAndHandleIdlePause();
+    }, 60);
+  }
+
+  // Periodic safety check (150ms)
   setInterval(() => {
     checkAndSkip();
     checkAndHandleIdlePause();
-  }, 100);
+  }, 150);
 
-  // MutationObserver for instant reaction
-  const observer = new MutationObserver(() => {
-    checkAndSkip();
-    checkAndHandleIdlePause();
-  });
+  // Coalesced MutationObserver
+  const observer = new MutationObserver(scheduleTick);
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['class', 'id']
+    attributeFilter: ['class', 'style']
   });
 
-  // Listen to triggers from content.js
-  document.addEventListener('__AutoSkipAds_TriggerSkip', () => {
+  window.addEventListener(TRIGGER_CHANNEL, () => {
     checkAndSkip();
     checkAndHandleIdlePause();
   });

@@ -21,16 +21,16 @@ Dengan kombinasi **Trusted ProxyEvent**, **Direct Seek Completion**, dan **Proac
 
 ## Fitur Utama
 
-- **Otomatis Klik Tombol Skip Murni**: Mengeksekusi aksi lewati iklan seketika tombol "Lewati Iklan" (*Skip Ad*) aktif di detik ke-5 atau setelah hitungan mundur selesai.
-- **Lewati Iklan Non-Skip (5s / 15s)**: Mendeteksi iklan yang tidak memiliki tombol lewati (seperti bumper ad 5-6 detik atau iklan non-skippable 15 detik), dan langsung melompatkan durasi ke detik akhir (`duration - 0.1`) sehingga iklan selesai instan dalam 0.1 detik.
+- **Otomatis Klik Tombol Skip Murni**: Mengeksekusi aksi lewati iklan seketika tombol "Lewati Iklan" (*Skip Ad*) aktif dan siap diklik (`opacity`, status disabled, dan visibilitas tervalidasi) dengan koordinat klik alami.
+- **Lewati Iklan Non-Skip (5s / 15s)**: Mendeteksi iklan yang benar-benar tidak memiliki tombol lewati (bumper ad 5-6 detik atau iklan non-skippable 15 detik), menunggu telemetri awal tercatat (~1 detik), lalu melompatkan durasi ke akhir (`duration - 0.15`) secara aman satu kali per iklan.
 - **Cegah Jeda Otomatis (Anti-Idle Pause)**: Mencegah dan secara otomatis melanjutkan pemutaran saat dialog *"Video paused. Continue watching?"* / *"Video dijeda. Lanjutkan menonton?"* muncul, sehingga video atau musik dapat diputar terus-menerus tanpa henti.
 - **Dukungan Multi-Iklan**: Menangani rangkaian iklan beruntun (*Ad 1 of 2* dan *Ad 2 of 2*) secara otomatis tanpa henti.
-- **Bypass Proteksi isTrusted YouTube**: Memanfaatkan injeksi konteks `world: "MAIN"` dan `ProxyEvent` untuk memicu handler klik internal player YouTube (`Nqb.onClick`) secara sah tanpa diblokir oleh anti-bot.
+- **Bypass Proteksi isTrusted YouTube (Stealth Mode)**: Memanfaatkan injeksi konteks `world: "MAIN"` dengan `WeakMap` + `Proxy` yang mempertahankan `[native code]` pada `EventTarget.prototype.addEventListener`, tanpa meninggalkan atribut atau properti tambahan di DOM.
 - **Tutup Banner Overlay**: Otomatis menutup banner iklan pop-up yang menutupi area bawah video.
 - **Pengatur Kecepatan Iklan (1x - 16x)**: Pilihan untuk memutar video iklan lebih cepat dengan perlindungan *auto-ease* di detik akhir agar buffer video tidak macet.
 - **Bisukan Audio Iklan (Auto-Mute)**: Opsi membisukan suara iklan secara otomatis selama iklan berlangsung dan mengembalikan volume saat video utama mulai.
 - **Statistik & Penghitung Real-Time**: Melacak jumlah iklan yang berhasil dilewati melalui antarmuka popup yang bersih dan modern.
-- **Bebas Deteksi Anti-Adblock**: Tidak memblokir traffic CDN atau domain analitik, menjaga kestabilan pemutaran video tanpa peringatan larangan ad-blocker.
+- **Minim Jejak Deteksi**: Tidak memblokir traffic CDN/analitik, tidak menempelkan atribut di `<html>`, dan tidak melakukan hook yang merusak pengecekan fungsi native browser.
 
 ---
 
@@ -42,16 +42,18 @@ Ekstensi ini dirancang menggunakan arsitektur modular dua lapis (*Dual-World Arc
 [ Browser Context ]
   |
   +-- Injected Script (world: "MAIN")
-  |     - Berjalan langsung di eksekusi utama YouTube
-  |     - Menangkap listener klik asli via EventTarget.prototype.addEventListener
-  |     - Membungkus MouseEvent dengan ProxyEvent (isTrusted: true, composedPath)
-  |     - Mengeksekusi Nqb.onClick langsung pada tombol .ytp-skip-ad-button
-  |     - Melompatkan durasi iklan non-skippable secara native
+  |     - Berjalan langsung di eksekusi utama YouTube tanpa jejak DOM/log
+  |     - Membungkus addEventListener/removeEventListener via Proxy (tetap [native code])
+  |     - Menyimpan referensi listener secara tertutup menggunakan WeakMap
+  |     - Membungkus MouseEvent dengan ProxyEvent (isTrusted: true, composedPath, koordinat tombol)
+  |     - Memvalidasi kesiapan tombol skip sebelum mengeksekusi Nqb.onClick (anti-spam)
+  |     - Melompatkan iklan non-skippable secara terukur satu kali per iklan
   |     - Memperbarui window._lact berkala untuk mencegah pemicu dialog idle
   |     - Mengonfirmasi dialog "Continue watching" dan melanjutkan pemutaran seketika
   |
   +-- Content Script (Isolated World)
   |     - Mengelola preferensi pengguna (toggle unskippable, anti-idle, speed, mute, banner)
+  |     - Menyinkronkan konfigurasi ke MAIN world melalui postMessage tanpa atribut DOM
   |     - Menyimpan data statistik ke chrome.storage.local
   |     - Mengawasi DOM dan mendeteksi kondisi iklan serta dialog idle
   |
