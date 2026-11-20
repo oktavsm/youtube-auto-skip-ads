@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Skip YouTube Ads",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Otomatis lewati iklan, cegah jeda otomatis (anti-idle), dan auto-scroll YouTube Shorts tanpa memblokir permintaan iklan.",
   "permissions": [
     "storage"

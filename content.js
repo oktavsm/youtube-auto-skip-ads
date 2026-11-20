@@ -5,6 +5,7 @@
   const CONFIG_REQ_CHANNEL = '__yt_cfg_req_7f3a';
   const TRIGGER_CHANNEL = '__yt_act_skip_7f3a';
   const SKIPPED_CHANNEL = '__yt_act_done_7f3a';
+  const SHORTS_NEXT_CHANNEL = '__yt_act_shorts_next_7f3a';
 
   function log(...args) {
     if (DEBUG) console.log('[AutoSkipAds]', ...args);
@@ -47,11 +48,16 @@
     'ytd-shorts button[aria-label*="Selanjutnya"]'
   ];
 
-  const SHORTS_AD_SELECTORS = [
+  const SHORTS_AD_CONTAINER_SELECTORS = [
     'ytd-ad-slot-renderer',
-    'ytd-in-feed-ad-layout-renderer',
+    'ytd-in-feed-ad-layout-renderer'
+  ];
+
+  const SHORTS_AD_BADGE_SELECTORS = [
     'ad-badge-view-model',
     'yt-ad-badge-view-model',
+    'reels-ad-metadata-view-model',
+    'reels-ad-card-buttoned-view-model',
     '.ytp-ad-player-overlay',
     '.ytp-ad-badge',
     '.ytp-ad-simple-ad-badge',
@@ -335,16 +341,55 @@
     return tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable;
   }
 
+  function isInViewport(el) {
+    if (!isVisible(el)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight - 4;
+  }
+
+  function isMainInViewport(el) {
+    if (!isVisible(el)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.height > 120 && rect.top < window.innerHeight * 0.75 && rect.bottom > window.innerHeight * 0.25;
+  }
+
   function getActiveShortsContext() {
-    const activeReel = document.querySelector('ytd-reel-video-renderer[is-active]');
-    const video = (activeReel && (activeReel.querySelector('video.html5-main-video') || activeReel.querySelector('video'))) ||
-      document.querySelector('#shorts-player video') ||
-      document.querySelector('ytd-shorts video');
+    const shortsRoot = document.querySelector('ytd-shorts') || document;
+    let activeReel = shortsRoot.querySelector('ytd-reel-video-renderer[is-active]');
+
+    if (!activeReel) {
+      const reelCandidates = shortsRoot.querySelectorAll(
+        'ytd-reel-video-renderer, ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, reels-player-overlay-layout-view-model'
+      );
+      for (const candidate of reelCandidates) {
+        if (isMainInViewport(candidate)) {
+          activeReel = candidate;
+          break;
+        }
+      }
+    }
+
+    let video = activeReel && (activeReel.querySelector('video.html5-main-video') || activeReel.querySelector('video'));
+    if (!video) {
+      const shortsPlayerVideo = document.querySelector('#shorts-player video');
+      if (shortsPlayerVideo && isInViewport(shortsPlayerVideo)) {
+        video = shortsPlayerVideo;
+      }
+    }
+    if (!video) {
+      for (const v of shortsRoot.querySelectorAll('video')) {
+        if (isMainInViewport(v)) {
+          video = v;
+          break;
+        }
+      }
+    }
+
     return { activeReel, video };
   }
 
   function getShortsKey(activeReel, video) {
-    const reelId = activeReel ? (activeReel.getAttribute('id') || '') : '';
+    const reelId = activeReel ? (activeReel.getAttribute('id') || activeReel.tagName) : '';
     const srcTail = video ? (video.currentSrc || video.src || '').slice(-24) : '';
     return `${window.location.pathname}|${reelId}|${srcTail}`;
   }
@@ -355,20 +400,20 @@
     shortsState.lastScrollTime = now;
 
     log('Shorts advancing to next Short.');
-    let clicked = false;
+    const startPath = window.location.pathname;
+    let hasDownBtn = false;
 
     for (const sel of SHORTS_NEXT_SELECTORS) {
       const btn = document.querySelector(sel);
       if (btn && isVisible(btn) && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
-        btn.click();
-        clicked = true;
+        hasDownBtn = true;
         break;
       }
     }
 
     const scrollFallback = () => {
       const nextReel = activeReel && activeReel.nextElementSibling;
-      if (nextReel && nextReel.tagName.toLowerCase() === 'ytd-reel-video-renderer') {
+      if (nextReel && /^(ytd-reel-video-renderer|ytd-ad-slot-renderer)$/i.test(nextReel.tagName)) {
         nextReel.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
@@ -378,38 +423,54 @@
       }
     };
 
-    if (!clicked) {
-      scrollFallback();
-    } else if (activeReel) {
-      // Verify navigation actually moved off the finished reel; fall back to scroll if needed
+    if (hasDownBtn) {
+      // Trigger trusted click via MAIN world engine first
+      window.dispatchEvent(new Event(SHORTS_NEXT_CHANNEL));
       setTimeout(() => {
-        if (isShortsPage() && activeReel.hasAttribute('is-active')) {
+        if (isShortsPage() && window.location.pathname === startPath) {
           scrollFallback();
         }
-      }, 350);
+      }, 400);
+    } else {
+      scrollFallback();
     }
 
     return true;
   }
 
   function isShortsAd(activeReel) {
-    if (!activeReel) return false;
-
-    if (activeReel.hasAttribute('is-ad')) return true;
-
     const shortsPlayer = document.querySelector('#shorts-player');
     if (shortsPlayer && (shortsPlayer.classList.contains('ad-showing') || shortsPlayer.classList.contains('ad-interrupting'))) {
       return true;
     }
 
-    for (const sel of SHORTS_AD_SELECTORS) {
-      if (activeReel.querySelector(sel)) return true;
+    if (activeReel && activeReel.hasAttribute('is-ad')) {
+      return true;
     }
 
-    // Check standalone Sponsored badge inside the active reel (excluding titles, descriptions, and comments)
-    const candidates = activeReel.querySelectorAll('span, yt-formatted-string, badge-shape, .yt-core-attributed-string');
+    // Scope to activeReel if it is a standard reel, otherwise inspect visible elements in ytd-shorts viewport
+    const scope = (activeReel && activeReel.matches('ytd-reel-video-renderer[is-active]'))
+      ? activeReel
+      : (document.querySelector('ytd-shorts') || activeReel);
+
+    if (!scope) return false;
+
+    for (const sel of SHORTS_AD_CONTAINER_SELECTORS) {
+      for (const match of scope.querySelectorAll(sel)) {
+        if (isMainInViewport(match)) return true;
+      }
+    }
+
+    for (const sel of SHORTS_AD_BADGE_SELECTORS) {
+      for (const match of scope.querySelectorAll(sel)) {
+        if (isInViewport(match)) return true;
+      }
+    }
+
+    // Check standalone Sponsored badge inside viewport (excluding titles, descriptions, and comments)
+    const candidates = scope.querySelectorAll('span, div, yt-formatted-string, badge-shape, .yt-core-attributed-string');
     for (const el of candidates) {
-      if (!isVisible(el)) continue;
+      if (el.children.length > 0 || !isInViewport(el)) continue;
       if (el.closest('h1, h2, h3, ytd-comments, #comments-button, [class*="title"], [class*="description"]')) {
         continue;
       }
@@ -423,7 +484,7 @@
   }
 
   function handleShortsAds(activeReel, video) {
-    if (!settings.enabled || !activeReel || !isShortsAd(activeReel)) return false;
+    if (!settings.enabled || !isShortsAd(activeReel)) return false;
 
     const reelKey = getShortsKey(activeReel, video);
     if (shortsState.lastScrolledKey === reelKey) {

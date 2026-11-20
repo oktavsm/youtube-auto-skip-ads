@@ -5,6 +5,7 @@
   const CONFIG_REQ_CHANNEL = '__yt_cfg_req_7f3a';
   const TRIGGER_CHANNEL = '__yt_act_skip_7f3a';
   const SKIPPED_CHANNEL = '__yt_act_done_7f3a';
+  const SHORTS_NEXT_CHANNEL = '__yt_act_shorts_next_7f3a';
 
   function log(...args) {
     if (DEBUG) console.log('[AutoSkipAds]', ...args);
@@ -399,6 +400,40 @@
     attributes: true,
     attributeFilter: ['class', 'style']
   });
+
+  const SHORTS_NEXT_SELECTORS = [
+    '#navigation-button-down button',
+    'ytd-shorts #navigation-button-down button',
+    '.navigation-button-down button',
+    'ytd-shorts button[aria-label*="Next video"]',
+    'ytd-shorts button[aria-label*="Video berikutnya"]',
+    'ytd-shorts button[aria-label*="Selanjutnya"]'
+  ];
+
+  function triggerShortsNext() {
+    for (const sel of SHORTS_NEXT_SELECTORS) {
+      const btn = document.querySelector(sel);
+      if (btn && isElementVisible(btn) && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+        const proxyEvent = createTrustedProxyEvent(btn);
+        let handled = invokeListenersOn(btn, proxyEvent);
+        if (!handled) {
+          const inner = btn.querySelector('div, span');
+          if (inner) handled = invokeListenersOn(inner, proxyEvent);
+        }
+        if (!handled && btn.parentElement) {
+          handled = invokeListenersOn(btn.parentElement, proxyEvent);
+        }
+        if (!handled) {
+          try { btn.dispatchEvent(proxyEvent); } catch (e) {}
+          try { btn.click(); } catch (e) {}
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  window.addEventListener(SHORTS_NEXT_CHANNEL, triggerShortsNext);
 
   window.addEventListener(TRIGGER_CHANNEL, () => {
     checkAndSkip();
