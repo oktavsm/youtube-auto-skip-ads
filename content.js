@@ -15,6 +15,7 @@
     autoCloseBanners: true,
     skipUnskippable: true,
     preventIdlePause: true,
+    autoScrollShorts: true,
     speedUpAd: false,
     adSpeed: 4,
     autoMuteAd: false
@@ -27,6 +28,24 @@
 
   const rateAdjustedVideos = new WeakSet();
   const mutedVideos = new WeakSet();
+  const shortsWatchedVideos = new WeakSet();
+  const shortsLoopOverridden = new WeakSet();
+
+  const shortsState = {
+    activeKey: '',
+    maxTimeSeen: 0,
+    lastScrolledKey: '',
+    lastScrollTime: 0
+  };
+
+  const SHORTS_NEXT_SELECTORS = [
+    '#navigation-button-down button',
+    'ytd-shorts #navigation-button-down button',
+    '.navigation-button-down button',
+    'ytd-shorts button[aria-label*="Next video"]',
+    'ytd-shorts button[aria-label*="Video berikutnya"]',
+    'ytd-shorts button[aria-label*="Selanjutnya"]'
+  ];
 
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
@@ -281,6 +300,142 @@
     }
   }
 
+  function isShortsPage() {
+    return window.location.pathname.startsWith('/shorts/');
+  }
+
+  function isUserEditingText() {
+    const active = document.activeElement;
+    if (!active) return false;
+    const tag = active.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable;
+  }
+
+  function getActiveShortsContext() {
+    const activeReel = document.querySelector('ytd-reel-video-renderer[is-active]');
+    const video = (activeReel && (activeReel.querySelector('video.html5-main-video') || activeReel.querySelector('video'))) ||
+      document.querySelector('#shorts-player video') ||
+      document.querySelector('ytd-shorts video');
+    return { activeReel, video };
+  }
+
+  function getShortsKey(activeReel, video) {
+    const reelId = activeReel ? (activeReel.getAttribute('id') || '') : '';
+    const srcTail = video ? (video.currentSrc || video.src || '').slice(-24) : '';
+    return `${window.location.pathname}|${reelId}|${srcTail}`;
+  }
+
+  function advanceToNextShort(activeReel) {
+    const now = Date.now();
+    if (now - shortsState.lastScrollTime < 1500) return;
+    shortsState.lastScrollTime = now;
+
+    log('Shorts ended: advancing to next Short.');
+    let clicked = false;
+
+    for (const sel of SHORTS_NEXT_SELECTORS) {
+      const btn = document.querySelector(sel);
+      if (btn && isVisible(btn) && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+        btn.click();
+        clicked = true;
+        break;
+      }
+    }
+
+    const scrollFallback = () => {
+      const nextReel = activeReel && activeReel.nextElementSibling;
+      if (nextReel && nextReel.tagName.toLowerCase() === 'ytd-reel-video-renderer') {
+        nextReel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      const container = document.querySelector('#shorts-inner-container');
+      if (container) {
+        container.scrollBy({ top: container.clientHeight || window.innerHeight, behavior: 'smooth' });
+      }
+    };
+
+    if (!clicked) {
+      scrollFallback();
+    } else if (activeReel) {
+      // Verify navigation actually moved off the finished reel; fall back to scroll if needed
+      setTimeout(() => {
+        if (isShortsPage() && activeReel.hasAttribute('is-active')) {
+          scrollFallback();
+        }
+      }, 350);
+    }
+  }
+
+  function handleShortsAutoScroll() {
+    if (!isShortsPage()) {
+      shortsState.activeKey = '';
+      shortsState.maxTimeSeen = 0;
+      return;
+    }
+
+    const { activeReel, video } = getActiveShortsContext();
+    if (!video) return;
+
+    if (!settings.autoScrollShorts) {
+      if (shortsLoopOverridden.has(video)) {
+        video.loop = true;
+        shortsLoopOverridden.delete(video);
+      }
+      return;
+    }
+
+    // Disable native Shorts looping so playback can finish cleanly
+    if (video.loop) {
+      video.loop = false;
+      shortsLoopOverridden.add(video);
+    }
+
+    if (!isFinite(video.duration) || video.duration <= 0.5) return;
+
+    const reelKey = getShortsKey(activeReel, video);
+    if (!shortsWatchedVideos.has(video)) {
+      shortsWatchedVideos.add(video);
+      video.addEventListener('ended', () => {
+        if (!isShortsPage() || !settings.autoScrollShorts || isUserEditingText()) return;
+        const { activeReel: currentReel } = getActiveShortsContext();
+        const currentKey = getShortsKey(currentReel, video);
+        if (shortsState.lastScrolledKey !== currentKey) {
+          shortsState.lastScrolledKey = currentKey;
+          advanceToNextShort(currentReel);
+        }
+      });
+    }
+
+    if (reelKey !== shortsState.activeKey) {
+      shortsState.activeKey = reelKey;
+      shortsState.maxTimeSeen = video.currentTime;
+      return;
+    }
+
+    const prevMax = shortsState.maxTimeSeen;
+    if (video.currentTime > prevMax) {
+      shortsState.maxTimeSeen = video.currentTime;
+    }
+
+    if (isUserEditingText() || shortsState.lastScrolledKey === reelKey) return;
+
+    const reachedEnd = video.ended ||
+      (!video.paused && !video.seeking && prevMax > 0.5 && (video.duration - video.currentTime <= 0.12));
+    const playerLoopedInternally = !video.paused && !video.seeking &&
+      video.duration >= 1.5 && prevMax >= video.duration - 0.8 && video.currentTime < 0.35;
+
+    if (reachedEnd || playerLoopedInternally) {
+      shortsState.lastScrolledKey = reelKey;
+      advanceToNextShort(activeReel);
+    }
+  }
+
+  function runTicks() {
+    handleAds();
+    handleIdlePause();
+    handleShortsAutoScroll();
+  }
+
   function init() {
     loadSettings();
     syncSettingsToMainWorld();
@@ -290,8 +445,7 @@
       if (throttleTimeout) return;
       throttleTimeout = setTimeout(() => {
         throttleTimeout = null;
-        handleAds();
-        handleIdlePause();
+        runTicks();
       }, 100);
     });
 
@@ -302,19 +456,10 @@
       attributeFilter: ['class', 'style']
     });
 
-    setInterval(() => {
-      handleAds();
-      handleIdlePause();
-    }, 200);
+    setInterval(runTicks, 200);
 
-    window.addEventListener('yt-navigate-finish', () => {
-      handleAds();
-      handleIdlePause();
-    });
-    window.addEventListener('yt-page-data-updated', () => {
-      handleAds();
-      handleIdlePause();
-    });
+    window.addEventListener('yt-navigate-finish', runTicks);
+    window.addEventListener('yt-page-data-updated', runTicks);
   }
 
   if (document.readyState === 'loading') {
@@ -327,10 +472,7 @@
   new MutationObserver(() => {
     if (location.href !== currentUrl) {
       currentUrl = location.href;
-      setTimeout(() => {
-        handleAds();
-        handleIdlePause();
-      }, 200);
+      setTimeout(runTicks, 200);
     }
   }).observe(document, { subtree: true, childList: true });
 })();

@@ -24,6 +24,7 @@ Dengan kombinasi **Trusted ProxyEvent**, **Direct Seek Completion**, dan **Proac
 - **Otomatis Klik Tombol Skip Murni**: Mengeksekusi aksi lewati iklan seketika tombol "Lewati Iklan" (*Skip Ad*) aktif dan siap diklik (`opacity`, status disabled, dan visibilitas tervalidasi) dengan koordinat klik alami.
 - **Lewati Iklan Non-Skip (5s / 15s)**: Mendeteksi iklan yang benar-benar tidak memiliki tombol lewati (bumper ad 5-6 detik atau iklan non-skippable 15 detik), menunggu telemetri awal tercatat (~1 detik), lalu melompatkan durasi ke akhir (`duration - 0.15`) secara aman satu kali per iklan.
 - **Cegah Jeda Otomatis (Anti-Idle Pause)**: Mencegah dan secara otomatis melanjutkan pemutaran saat dialog *"Video paused. Continue watching?"* / *"Video dijeda. Lanjutkan menonton?"* muncul, sehingga video atau musik dapat diputar terus-menerus tanpa henti.
+- **Auto-Scroll YouTube Shorts**: Menonaktifkan loop otomatis pada YouTube Shorts dan menggulir ke video berikutnya secara mulus tepat setelah Shorts selesai diputar (tetap aman saat sedang mengetik komentar).
 - **Dukungan Multi-Iklan**: Menangani rangkaian iklan beruntun (*Ad 1 of 2* dan *Ad 2 of 2*) secara otomatis tanpa henti.
 - **Bypass Proteksi isTrusted YouTube (Stealth Mode)**: Memanfaatkan injeksi konteks `world: "MAIN"` dengan `WeakMap` + `Proxy` yang mempertahankan `[native code]` pada `EventTarget.prototype.addEventListener`, tanpa meninggalkan atribut atau properti tambahan di DOM.
 - **Tutup Banner Overlay**: Otomatis menutup banner iklan pop-up yang menutupi area bawah video.
@@ -52,10 +53,10 @@ Ekstensi ini dirancang menggunakan arsitektur modular dua lapis (*Dual-World Arc
   |     - Mengonfirmasi dialog "Continue watching" dan melanjutkan pemutaran seketika
   |
   +-- Content Script (Isolated World)
-  |     - Mengelola preferensi pengguna (toggle unskippable, anti-idle, speed, mute, banner)
+  |     - Mengelola preferensi pengguna (unskippable, anti-idle, shorts scroll, speed, mute, banner)
   |     - Menyinkronkan konfigurasi ke MAIN world melalui postMessage tanpa atribut DOM
   |     - Menyimpan data statistik ke chrome.storage.local
-  |     - Mengawasi DOM dan mendeteksi kondisi iklan serta dialog idle
+  |     - Mengawasi DOM dan mendeteksi kondisi iklan, dialog idle, serta akhir pemutaran Shorts
   |
   +-- Extension Popup (Action UI)
         - Antarmuka tema gelap (Dark Theme)

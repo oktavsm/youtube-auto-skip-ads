@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const toggleEnabled = document.getElementById('toggleEnabled');
   const toggleUnskippable = document.getElementById('toggleUnskippable');
   const togglePreventIdle = document.getElementById('togglePreventIdle');
+  const toggleShortsScroll = document.getElementById('toggleShortsScroll');
   const toggleBanners = document.getElementById('toggleBanners');
   const toggleSpeed = document.getElementById('toggleSpeed');
   const speedSliderGroup = document.getElementById('speedSliderGroup');
@@ -21,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoCloseBanners: true,
     skipUnskippable: true,
     preventIdlePause: true,
+    autoScrollShorts: true,
     speedUpAd: false,
     adSpeed: 4,
     autoMuteAd: false,
@@ -63,6 +65,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (togglePreventIdle) {
         togglePreventIdle.checked = data.preventIdlePause !== false;
       }
+      if (toggleShortsScroll) {
+        toggleShortsScroll.checked = data.autoScrollShorts !== false;
+      }
       toggleBanners.checked = data.autoCloseBanners !== false;
       toggleSpeed.checked = data.speedUpAd === true;
       toggleMute.checked = data.autoMuteAd === true;
@@ -87,21 +92,21 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
 
-    if (toggleUnskippable) {
-      toggleUnskippable.addEventListener('change', () => {
-        chrome.storage.local.set({ skipUnskippable: toggleUnskippable.checked });
-      });
-    }
+    const simpleToggles = [
+      [toggleUnskippable, 'skipUnskippable'],
+      [togglePreventIdle, 'preventIdlePause'],
+      [toggleShortsScroll, 'autoScrollShorts'],
+      [toggleBanners, 'autoCloseBanners'],
+      [toggleMute, 'autoMuteAd']
+    ];
 
-    if (togglePreventIdle) {
-      togglePreventIdle.addEventListener('change', () => {
-        chrome.storage.local.set({ preventIdlePause: togglePreventIdle.checked });
-      });
+    for (const [el, key] of simpleToggles) {
+      if (el) {
+        el.addEventListener('change', () => {
+          chrome.storage.local.set({ [key]: el.checked });
+        });
+      }
     }
-
-    toggleBanners.addEventListener('change', () => {
-      chrome.storage.local.set({ autoCloseBanners: toggleBanners.checked });
-    });
 
     toggleSpeed.addEventListener('change', () => {
       const isSpeedEnabled = toggleSpeed.checked;
@@ -114,10 +119,6 @@ document.addEventListener('DOMContentLoaded', () => {
       speedValueBadge.textContent = val + 'x';
       speedSlider.setAttribute('aria-valuenow', val);
       chrome.storage.local.set({ adSpeed: val });
-    });
-
-    toggleMute.addEventListener('change', () => {
-      chrome.storage.local.set({ autoMuteAd: toggleMute.checked });
     });
 
     resetStatsBtn.addEventListener('click', () => {
