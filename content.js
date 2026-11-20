@@ -47,6 +47,30 @@
     'ytd-shorts button[aria-label*="Selanjutnya"]'
   ];
 
+  const SHORTS_AD_SELECTORS = [
+    'ytd-ad-slot-renderer',
+    'ytd-in-feed-ad-layout-renderer',
+    'ad-badge-view-model',
+    'yt-ad-badge-view-model',
+    '.ytp-ad-player-overlay',
+    '.ytp-ad-badge',
+    '.ytp-ad-simple-ad-badge',
+    '[class*="ad-badge-view-model"]'
+  ];
+
+  const SHORTS_SPONSORED_LABELS = new Set([
+    'sponsored',
+    'bersponsor',
+    'iklan',
+    'gesponsert',
+    'sponsorisé',
+    'patrocinado',
+    'sponsorlu',
+    'реклама',
+    '広告',
+    '광고'
+  ]);
+
   const BANNER_SELECTORS = [
     '.ytp-ad-overlay-close-button',
     '.ytp-ad-overlay-close-container button',
@@ -270,7 +294,7 @@
   });
 
   function handleAds() {
-    if (isRunning || !settings.enabled) return;
+    if (isRunning || !settings.enabled || isShortsPage()) return;
     isRunning = true;
 
     try {
@@ -325,12 +349,12 @@
     return `${window.location.pathname}|${reelId}|${srcTail}`;
   }
 
-  function advanceToNextShort(activeReel) {
+  function advanceToNextShort(activeReel, cooldownMs = 1500) {
     const now = Date.now();
-    if (now - shortsState.lastScrollTime < 1500) return;
+    if (now - shortsState.lastScrollTime < cooldownMs) return false;
     shortsState.lastScrollTime = now;
 
-    log('Shorts ended: advancing to next Short.');
+    log('Shorts advancing to next Short.');
     let clicked = false;
 
     for (const sel of SHORTS_NEXT_SELECTORS) {
@@ -364,6 +388,64 @@
         }
       }, 350);
     }
+
+    return true;
+  }
+
+  function isShortsAd(activeReel) {
+    if (!activeReel) return false;
+
+    if (activeReel.hasAttribute('is-ad')) return true;
+
+    const shortsPlayer = document.querySelector('#shorts-player');
+    if (shortsPlayer && (shortsPlayer.classList.contains('ad-showing') || shortsPlayer.classList.contains('ad-interrupting'))) {
+      return true;
+    }
+
+    for (const sel of SHORTS_AD_SELECTORS) {
+      if (activeReel.querySelector(sel)) return true;
+    }
+
+    // Check standalone Sponsored badge inside the active reel (excluding titles, descriptions, and comments)
+    const candidates = activeReel.querySelectorAll('span, yt-formatted-string, badge-shape, .yt-core-attributed-string');
+    for (const el of candidates) {
+      if (!isVisible(el)) continue;
+      if (el.closest('h1, h2, h3, ytd-comments, #comments-button, [class*="title"], [class*="description"]')) {
+        continue;
+      }
+      const text = (el.textContent || '').trim().toLowerCase();
+      if (SHORTS_SPONSORED_LABELS.has(text)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function handleShortsAds(activeReel, video) {
+    if (!settings.enabled || !activeReel || !isShortsAd(activeReel)) return false;
+
+    const reelKey = getShortsKey(activeReel, video);
+    if (shortsState.lastScrolledKey === reelKey) {
+      return true;
+    }
+
+    if (advanceToNextShort(activeReel, 700)) {
+      log('Shorts sponsored ad detected: skipping to next Short.');
+      shortsState.lastScrolledKey = reelKey;
+      incrementSkipCounter();
+
+      if (video && !video.muted) {
+        video.muted = true;
+        setTimeout(() => {
+          try {
+            video.muted = false;
+          } catch (e) {}
+        }, 600);
+      }
+    }
+
+    return true;
   }
 
   function handleShortsAutoScroll() {
@@ -374,6 +456,10 @@
     }
 
     const { activeReel, video } = getActiveShortsContext();
+    if (handleShortsAds(activeReel, video)) {
+      return;
+    }
+
     if (!video) return;
 
     if (!settings.autoScrollShorts) {

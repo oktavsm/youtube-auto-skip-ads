@@ -356,8 +356,8 @@
       return;
     }
 
-    // Handle genuinely unskippable ads safely (only when no skip button/countdown UI exists)
-    if (config.skipUnskippable && !hasPendingSkippableUI(scope)) {
+    // Handle genuinely unskippable ads safely on standard watch pages (Shorts ads are scrolled past)
+    if (config.skipUnskippable && !window.location.pathname.startsWith('/shorts/') && !hasPendingSkippableUI(scope)) {
       const video = scope.querySelector('video.html5-main-video') || scope.querySelector('video');
       if (video && isFinite(video.duration) && video.duration > 0 && video.duration <= 25) {
         const adKey = `${(video.currentSrc || video.src || '').slice(-32)}|${video.duration.toFixed(1)}`;
